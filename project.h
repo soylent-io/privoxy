@@ -45,6 +45,15 @@
 #include "config.h"
 
 #ifdef FEATURE_HTTPS_INSPECTION
+/*
+* Macros for SSL structures
+*/
+#define CERT_INFO_BUF_SIZE         4096
+#define CERT_FILE_BUF_SIZE         16384
+#define ISSUER_NAME_BUF_SIZE       2048
+#define HASH_OF_HOST_BUF_SIZE      16
+#endif /* FEATURE_HTTPS_INSPECTION */
+
 #ifdef FEATURE_PTHREAD
 #  include <pthread.h>
    typedef pthread_mutex_t privoxy_mutex_t;
@@ -55,6 +64,7 @@
    typedef CRITICAL_SECTION privoxy_mutex_t;
 #endif
 
+#ifdef FEATURE_HTTPS_INSPECTION_MBEDTLS
 #include "mbedtls/net_sockets.h"
 #include "mbedtls/entropy.h"
 #include "mbedtls/ctr_drbg.h"
@@ -62,15 +72,13 @@
 #if defined(MBEDTLS_SSL_CACHE_C)
 #include "mbedtls/ssl_cache.h"
 #endif
+#endif /* FEATURE_HTTPS_INSPECTION_MBEDTLS */
 
-/*
-* Macros for SSL structures
-*/
-#define CERT_INFO_BUF_SIZE         4096
-#define CERT_FILE_BUF_SIZE         16384
-#define ISSUER_NAME_BUF_SIZE       2048
-#define HASH_OF_HOST_BUF_SIZE      16
-#endif
+#ifdef FEATURE_HTTPS_INSPECTION_OPENSSL
+#include <openssl/ssl.h>
+#include <openssl/bio.h>
+#include <openssl/err.h>
+#endif /* FEATURE_HTTPS_INSPECTION_OPENSSL */
 
 /* Need for struct sockaddr_storage */
 #ifdef HAVE_RFC2553
@@ -287,7 +295,7 @@ struct map
    struct map_entry *last;
 };
 
-#ifdef FEATURE_HTTPS_INSPECTION
+#ifdef FEATURE_HTTPS_INSPECTION_MBEDTLS
 /*
  * Struct of attributes necessary for TLS/SSL connection
  */
@@ -303,8 +311,17 @@ typedef struct {
       mbedtls_ssl_cache_context cache;
    #endif
 } mbedtls_connection_attr;
-#endif
+#endif /* FEATURE_HTTPS_INSPECTION_MBEDTLS */
 
+#ifdef FEATURE_HTTPS_INSPECTION_OPENSSL
+/*
+ * Struct of attributes necessary for TLS/SSL connection
+ */
+typedef struct {
+   SSL_CTX* ctx;
+   BIO *bio;
+} openssl_connection_attr;
+#endif /* FEATURE_HTTPS_INSPECTION_OPENSSL */
 /**
  * A HTTP request.  This includes the method (GET, POST) and
  * the parsed URL.
@@ -962,6 +979,14 @@ struct reusable_connection
  */
 #define MAX_LISTENING_SOCKETS 10
 
+struct ssl_attr {
+#ifdef FEATURE_HTTPS_INSPECTION_MBEDTLS
+   mbedtls_connection_attr  mbedtls_attr; /* Mbed TLS attrs*/
+#endif /* FEATURE_HTTPS_INSPECTION_MBEDTLS */
+#ifdef FEATURE_HTTPS_INSPECTION_OPENSSL
+   openssl_connection_attr  openssl_attr; /* OpenSSL atrrs */
+#endif /* FEATURE_HTTPS_INSPECTION_OPENSSL */
+};
 /**
  * The state of a Privoxy processing thread.
  */
@@ -1016,10 +1041,8 @@ struct client_state
    /* XXX: should be renamed to server_iob */
    struct iob iob[1];
 
-#ifdef FEATURE_HTTPS_INSPECTION
-   mbedtls_connection_attr  mbedtls_server_attr; /* attributes for connection to server */
-   mbedtls_connection_attr  mbedtls_client_attr; /* attributes for connection to client */
-#endif
+   struct ssl_attr ssl_server_attr; /* attributes for connection to server */
+   struct ssl_attr ssl_client_attr; /* attributes for connection to client */
 
    /** An I/O buffer used for buffering data read from the client */
    struct iob client_iob[1];
