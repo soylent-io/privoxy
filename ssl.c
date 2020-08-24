@@ -1850,15 +1850,15 @@ extern int ssl_base64_encode(unsigned char *dst, size_t dlen, size_t *olen,
  *
  * Parameters  :
  *          1  :  buf = Buffer to write to
- *          2  :  buf = Maximum size of buffer
- *          1  :  buf = Verification result code
+ *          2  :  size = Maximum size of buffer
+ *          3  :  csp = client state
  *
  * Returns     :  N/A
  *
  *********************************************************************/
-extern void ssl_crt_verify_info(char *buf, size_t size, uint32_t verification_result)
+extern void ssl_crt_verify_info(char *buf, size_t size, struct client_state *csp)
 {
-   mbedtls_x509_crt_verify_info(buf, size, " ", verification_result);
+   mbedtls_x509_crt_verify_info(buf, size, " ", csp->server_cert_verification_result);
 }
 
 
@@ -1866,7 +1866,7 @@ extern void ssl_crt_verify_info(char *buf, size_t size, uint32_t verification_re
  *
  * Function    :  ssl_release
  *
- * Description :  Release all SSL resourced
+ * Description :  Release all SSL resources
  *
  * Parameters  :
  *

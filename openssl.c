@@ -245,8 +245,13 @@ static int ssl_store_cert(struct client_state *csp, X509* crt)
    struct certs_chain  *last = &(csp->server_certs_chain);
    int ret = 0;
    BIO *bio = BIO_new(BIO_s_mem());
+   EVP_PKEY *pkey = NULL;
    char *bio_mem_data = 0;
    char *encoded_text;
+   long l;
+   const ASN1_INTEGER *bs;
+   const X509_ALGOR *tsig_alg;
+   int loc;
 
    if (!bio)
    {
@@ -302,12 +307,249 @@ static int ssl_store_cert(struct client_state *csp, X509* crt)
    /*
     * Saving certificate information into buffer
     */
-   if (!X509_NAME_print_ex(bio, X509_get_subject_name(crt), 0, XN_FLAG_COMPAT))
-   {
-      log_ssl_errors(LOG_LEVEL_ERROR, "X509_NAME_print_ex() failed");
+   l = X509_get_version(crt);
+   if (l >= 0 && l <= 2) {
+      if (BIO_printf(bio, "cert. version     : %ld\n", l + 1) <= 0) {
+         log_ssl_errors(LOG_LEVEL_ERROR, "BIO_printf() for version failed");
+         ret = -1;
+         goto exit;
+      }
+   } else {
+      if (BIO_printf(bio, "cert. version     : Unknown (%ld)\n", l) <= 0) {
+         log_ssl_errors(LOG_LEVEL_ERROR, "BIO_printf() for version failed");
+         ret = -1;
+         goto exit;
+      }
+   }
+
+   if (BIO_puts(bio, "serial number     : ") <= 0) {
+      log_ssl_errors(LOG_LEVEL_ERROR, "BIO_write() for serial failed");
       ret = -1;
       goto exit;
    }
+   bs = X509_get0_serialNumber(crt);
+   if (bs->length <= (int)sizeof(long)) {
+      ERR_set_mark();
+      l = ASN1_INTEGER_get(bs);
+      ERR_pop_to_mark();
+   } else {
+      l = -1;
+   }
+   if (l != -1) {
+      unsigned long ul;
+      const char *neg;
+      if (bs->type == V_ASN1_NEG_INTEGER) {
+         ul = 0 - (unsigned long)l;
+         neg = "-";
+      } else {
+         ul = (unsigned long)l;
+         neg = "";
+      }
+      if (BIO_printf(bio, " %s%lu (%s0x%lx)\n", neg, ul, neg, ul) <= 0) {
+         log_ssl_errors(LOG_LEVEL_ERROR, "BIO_printf() for serial failed");
+         ret = -1;
+         goto exit;
+      }
+   } else {
+      if (bs->type == V_ASN1_NEG_INTEGER) {
+         if (BIO_puts(bio, " (Negative)") < 0) {
+            log_ssl_errors(LOG_LEVEL_ERROR, "BIO_puts() for serial failed");
+            ret = -1;
+            goto exit;
+         }
+      }
+      for (int i = 0; i < bs->length; i++) {
+         if (BIO_printf(bio, "%02x%c", bs->data[i],
+                        ((i + 1 == bs->length) ? '\n' : ':')) <= 0) {
+            log_ssl_errors(LOG_LEVEL_ERROR, "BIO_printf() for serial failed");
+            ret = -1;
+            goto exit;
+         }
+      }
+   }
+
+   if (BIO_puts(bio, "issuer name       : ") <= 0) {
+      log_ssl_errors(LOG_LEVEL_ERROR, "BIO_puts() for issuer failed");
+      ret = -1;
+      goto exit;
+   }
+   if (X509_NAME_print_ex(bio, X509_get_issuer_name(crt), 0, 0) < 0) {
+      log_ssl_errors(LOG_LEVEL_ERROR, "X509_NAME_print_ex() for issuer failed");
+      ret = -1;
+      goto exit;
+   }
+
+   if (BIO_puts(bio, "\nsubject name      : ") <= 0) {
+      log_ssl_errors(LOG_LEVEL_ERROR, "BIO_puts() for sublect failed");
+      ret = -1;
+      goto exit;
+   }
+   if (X509_NAME_print_ex(bio, X509_get_subject_name(crt), 0, 0) < 0) {
+      log_ssl_errors(LOG_LEVEL_ERROR, "X509_NAME_print_ex() for subject failed");
+      ret = -1;
+      goto exit;
+   }
+
+   if (BIO_puts(bio, "\nissued  on        : ") <= 0) {
+      log_ssl_errors(LOG_LEVEL_ERROR, "BIO_puts() for issued on failed");
+      ret = -1;
+      goto exit;
+   }
+   if (!ASN1_TIME_print(bio, X509_get0_notBefore(crt))) {
+      log_ssl_errors(LOG_LEVEL_ERROR, "ASN1_TIME_print() for issued on failed");
+      ret = -1;
+      goto exit;
+   }
+
+   if (BIO_puts(bio, "\nexpires on        : ") <= 0) {
+      log_ssl_errors(LOG_LEVEL_ERROR, "BIO_puts() for expires on failed");
+      ret = -1;
+      goto exit;
+   }
+   if (!ASN1_TIME_print(bio, X509_get0_notAfter(crt))) {
+      log_ssl_errors(LOG_LEVEL_ERROR, "ASN1_TIME_print() for expires on failed");
+      ret = -1;
+      goto exit;
+   }
+
+   if (BIO_puts(bio, "\nsigned using      : ") <= 0) {
+      log_ssl_errors(LOG_LEVEL_ERROR, "BIO_puts() for signed using failed");
+      ret = -1;
+      goto exit;
+   }
+   tsig_alg = X509_get0_tbs_sigalg(crt);
+   if (!i2a_ASN1_OBJECT(bio, tsig_alg->algorithm)) {
+      log_ssl_errors(LOG_LEVEL_ERROR, "i2a_ASN1_OBJECT() for signed using on failed");
+      ret = -1;
+      goto exit;
+   }
+   pkey = X509_get_pubkey(crt);
+   if (!pkey) {
+      log_ssl_errors(LOG_LEVEL_ERROR, "X509_get_pubkey() failed");
+      ret = -1;
+      goto exit;
+   }
+#define BC              "18"
+   switch (EVP_PKEY_base_id(pkey)) {
+   case EVP_PKEY_RSA:
+      ret = BIO_printf(bio, "\n%-" BC "s: %d bits", "RSA key size", EVP_PKEY_bits(pkey));
+      break;
+   case EVP_PKEY_DSA:
+      ret = BIO_printf(bio, "\n%-" BC "s: %d bits", "DSA key size", EVP_PKEY_bits(pkey));
+      break;
+   default:
+      ret = BIO_printf(bio, "\n%-" BC "s: %d bits", "non-RSA/DSA key size", EVP_PKEY_bits(pkey));
+      break;
+   }
+   if (ret <= 0) {
+      log_ssl_errors(LOG_LEVEL_ERROR, "BIO_printf() for key size failed");
+      ret = -1;
+      goto exit;
+   }
+
+   loc = X509_get_ext_by_NID(crt, NID_basic_constraints, -1);
+   if (loc != -1) {
+      X509_EXTENSION *ex = X509_get_ext(crt, loc);
+      if (BIO_puts(bio, "\nbasic constraints : ") <= 0) {
+         log_ssl_errors(LOG_LEVEL_ERROR, "BIO_printf() for basic constraints failed");
+         ret = -1;
+         goto exit;
+      }
+      if (!X509V3_EXT_print(bio, ex, 0, 0)) {
+         if (!ASN1_STRING_print_ex(bio, X509_EXTENSION_get_data(ex), ASN1_STRFLGS_RFC2253)) {
+            log_ssl_errors(LOG_LEVEL_ERROR, "ASN1_STRING_print_ex() for basic constraints failed");
+            ret = -1;
+            goto exit;
+         }
+      }
+   }
+
+   loc = X509_get_ext_by_NID(crt, NID_subject_alt_name, -1);
+   if (loc != -1) {
+      X509_EXTENSION *ex = X509_get_ext(crt, loc);
+      if (BIO_puts(bio, "\nsubject alt name  : ") <= 0) {
+         log_ssl_errors(LOG_LEVEL_ERROR, "BIO_printf() for alt name failed");
+         ret = -1;
+         goto exit;
+      }
+      if (!X509V3_EXT_print(bio, ex, 0, 0)) {
+         if (!ASN1_STRING_print_ex(bio, X509_EXTENSION_get_data(ex), ASN1_STRFLGS_RFC2253)) {
+            log_ssl_errors(LOG_LEVEL_ERROR, "ASN1_STRING_print_ex() for alt name failed");
+            ret = -1;
+            goto exit;
+         }
+      }
+   }
+
+   loc = X509_get_ext_by_NID(crt, NID_netscape_cert_type, -1);
+   if (loc != -1) {
+      X509_EXTENSION *ex = X509_get_ext(crt, loc);
+      if (BIO_puts(bio, "\ncert. type        : ") <= 0) {
+         log_ssl_errors(LOG_LEVEL_ERROR, "BIO_printf() for cert type failed");
+         ret = -1;
+         goto exit;
+      }
+      if (!X509V3_EXT_print(bio, ex, 0, 0)) {
+         if (!ASN1_STRING_print_ex(bio, X509_EXTENSION_get_data(ex), ASN1_STRFLGS_RFC2253)) {
+            log_ssl_errors(LOG_LEVEL_ERROR, "ASN1_STRING_print_ex() for cert type failed");
+            ret = -1;
+            goto exit;
+         }
+      }
+   }
+
+   loc = X509_get_ext_by_NID(crt, NID_key_usage, -1);
+   if (loc != -1) {
+      X509_EXTENSION *ex = X509_get_ext(crt, loc);
+      if (BIO_puts(bio, "\nkey usage         : ") <= 0) {
+         log_ssl_errors(LOG_LEVEL_ERROR, "BIO_printf() for key usage failed");
+         ret = -1;
+         goto exit;
+      }
+      if (!X509V3_EXT_print(bio, ex, 0, 0)) {
+         if (!ASN1_STRING_print_ex(bio, X509_EXTENSION_get_data(ex), ASN1_STRFLGS_RFC2253)) {
+            log_ssl_errors(LOG_LEVEL_ERROR, "ASN1_STRING_print_ex() for key usage failed");
+            ret = -1;
+            goto exit;
+         }
+      }
+   }
+
+   loc = X509_get_ext_by_NID(crt, NID_ext_key_usage, -1);
+   if (loc != -1) {
+      X509_EXTENSION *ex = X509_get_ext(crt, loc);
+      if (BIO_puts(bio, "\next key usage     : ") <= 0) {
+         log_ssl_errors(LOG_LEVEL_ERROR, "BIO_printf() for ext key usage failed");
+         ret = -1;
+         goto exit;
+      }
+      if (!X509V3_EXT_print(bio, ex, 0, 0)) {
+         if (!ASN1_STRING_print_ex(bio, X509_EXTENSION_get_data(ex), ASN1_STRFLGS_RFC2253)) {
+            log_ssl_errors(LOG_LEVEL_ERROR, "ASN1_STRING_print_ex() for ext key usage failed");
+            ret = -1;
+            goto exit;
+         }
+      }
+   }
+
+   loc = X509_get_ext_by_NID(crt, NID_certificate_policies, -1);
+   if (loc != -1) {
+      X509_EXTENSION *ex = X509_get_ext(crt, loc);
+      if (BIO_puts(bio, "\ncertificate policies : ") <= 0) {
+         log_ssl_errors(LOG_LEVEL_ERROR, "BIO_printf() for certificate policies failed");
+         ret = -1;
+         goto exit;
+      }
+      if (!X509V3_EXT_print(bio, ex, 0, 0)) {
+         if (!ASN1_STRING_print_ex(bio, X509_EXTENSION_get_data(ex), ASN1_STRFLGS_RFC2253)) {
+            log_ssl_errors(LOG_LEVEL_ERROR, "ASN1_STRING_print_ex() for certificate policies failed");
+            ret = -1;
+            goto exit;
+         }
+      }
+   }
+
+   /* make valgrind happy */
    static const char zero = 0;
    BIO_write(bio, &zero, 1);
 
@@ -315,9 +557,11 @@ static int ssl_store_cert(struct client_state *csp, X509* crt)
    encoded_text = html_encode(bio_mem_data);
    strlcpy(last->info_buf, encoded_text, sizeof(last->info_buf));
    freez(encoded_text);
+   ret = 0;
 
 exit:
    if (bio) BIO_free(bio);
+   if (pkey) EVP_PKEY_free(pkey);
    return ret;
 }
 
@@ -448,6 +692,8 @@ extern int create_client_ssl_connection(struct client_state *csp)
       ret = -1;
       goto exit;
    }
+
+   SSL_CTX_set_options(ssl_attr->openssl_attr.ctx, SSL_OP_NO_SSLv3);
 
    if (!(ssl_attr->openssl_attr.bio = BIO_new_ssl(ssl_attr->openssl_attr.ctx, 0))) {
       log_ssl_errors(LOG_LEVEL_ERROR, "Unable to create BIO structure");
@@ -603,8 +849,7 @@ extern int create_server_ssl_connection(struct client_state *csp)
    openssl_connection_attr *ssl_attrs = &csp->ssl_server_attr.openssl_attr;
    int ret = 0;
    char *trusted_cas_file = NULL;
-   int auth_mode = SSL_VERIFY_PEER;
-   X509* cert = NULL;
+   STACK_OF(X509) *chain;
    SSL *ssl;
 
    csp->server_cert_verification_result = SSL_CERT_NOT_VERIFIED;
@@ -633,16 +878,8 @@ extern int create_server_ssl_connection(struct client_state *csp)
       goto exit;
    }
 
-   /*
-    * Setting how strict should certificate verification be and other
-    * parameters for certificate verification
-    */
-   if (csp->dont_verify_certificate)
-   {
-      auth_mode = SSL_VERIFY_NONE;
-   }
-
-   SSL_CTX_set_verify(ssl_attrs->ctx, auth_mode, NULL);
+   SSL_CTX_set_verify(ssl_attrs->ctx, SSL_VERIFY_NONE, NULL);
+   SSL_CTX_set_options(ssl_attrs->ctx, SSL_OP_NO_SSLv3);
 
    if (!(ssl_attrs->bio = BIO_new_ssl(ssl_attrs->ctx, 1))) {
       log_ssl_errors(LOG_LEVEL_ERROR, "Unable to create BIO structure");
@@ -667,6 +904,14 @@ extern int create_server_ssl_connection(struct client_state *csp)
    /*
     * Set the hostname to check against the received server certificate
     */
+   if (!SSL_set1_host(ssl, csp->http->host))
+   {
+      log_ssl_errors(LOG_LEVEL_ERROR, "SSL_set1_host failed");
+      ret = -1;
+      goto exit;
+   }
+
+   /* SNI extension */
    if (!SSL_set_tlsext_host_name(ssl, csp->http->host))
    {
       log_ssl_errors(LOG_LEVEL_ERROR, "SSL_set_tlsext_host_name failed");
@@ -687,25 +932,28 @@ extern int create_server_ssl_connection(struct client_state *csp)
       goto exit;
    }
 
-   cert = SSL_get_peer_certificate(ssl);
-   if(cert) {
-      if (ssl_store_cert(csp, cert) != 0) {
-         log_error(LOG_LEVEL_ERROR, "ssl_store_cert failed");
-         ret = -1;
-         goto exit;
+   chain = SSL_get_peer_cert_chain(ssl);
+   if (chain) {
+      for (int i = 0; i < sk_X509_num(chain); i++) {
+         if (ssl_store_cert(csp, sk_X509_value(chain, i)) != 0) {
+            log_error(LOG_LEVEL_ERROR, "ssl_store_cert failed");
+            ret = -1;
+            goto exit;
+         }
       }
-      X509_free(cert); /* Free immediately */
-      cert = NULL;
    }
 
    if (!csp->dont_verify_certificate)
    {
-      if (SSL_get_verify_result(ssl) == X509_V_OK)
+      long verify_result = SSL_get_verify_result(ssl);
+      if (verify_result == X509_V_OK)
       {
          ret = 0;
          csp->server_cert_verification_result = SSL_CERT_VALID;
       } else {
-         log_ssl_errors(LOG_LEVEL_ERROR, "SSL_get_verify_result failed");
+         csp->server_cert_verification_result = verify_result;
+         log_error(LOG_LEVEL_ERROR, "SSL_get_verify_result failed: %s",
+                    X509_verify_cert_error_string(verify_result));
          ret = -1;
          goto exit;
       }
@@ -1108,14 +1356,14 @@ static int ssl_certificate_is_invalid(const char *cert_file)
       return 1;
    }
 
-   ret = X509_cmp_current_time(X509_get_notBefore(cert));
+   ret = X509_cmp_current_time(X509_get_notAfter(cert));
    if (ret == 0) {
       log_ssl_errors(LOG_LEVEL_ERROR, "Error checking certificate %s validity", cert_file);
    }
 
    X509_free(cert);
 
-   return ret == -1 ? 0 : 1;
+   return ret == -1 ? 1 : 0;
 }
 
 /*********************************************************************
@@ -1454,7 +1702,7 @@ static int generate_webpage_certificate(struct client_state *csp)
 
    if (!(pk_bio = BIO_new_file(cert_opt.issuer_key, "r")))
    {
-         log_ssl_errors(LOG_LEVEL_ERROR, "Failure opening issuer key %s BIO", cert_opt.subject_key);
+         log_ssl_errors(LOG_LEVEL_ERROR, "Failure opening issuer key %s BIO", cert_opt.issuer_key);
          ret = -1;
          goto exit;
    }
@@ -1626,15 +1874,16 @@ exit:
  *
  * Parameters  :
  *          1  :  buf = Buffer to write to
- *          2  :  buf = Maximum size of buffer
- *          1  :  buf = Verification result code
+ *          2  :  size = Maximum size of buffer
+ *          3  :  csp = client state
  *
  * Returns     :  N/A
  *
  *********************************************************************/
-extern void ssl_crt_verify_info(char *buf, size_t size, uint32_t verification_result)
+extern void ssl_crt_verify_info(char *buf, size_t size, struct client_state *csp)
 {
-   ERR_error_string_n(verification_result, buf, size);
+   strncpy(buf, X509_verify_cert_error_string(csp->server_cert_verification_result), size);
+   buf[size - 1] = 0;
 }
 
 
@@ -1642,7 +1891,7 @@ extern void ssl_crt_verify_info(char *buf, size_t size, uint32_t verification_re
  *
  * Function    :  ssl_release
  *
- * Description :  Release all SSL resourced
+ * Description :  Release all SSL resources
  *
  * Parameters  :
  *

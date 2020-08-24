@@ -340,7 +340,7 @@ extern void ssl_send_certificate_error(struct client_state *csp)
    memset(reason, 0, sizeof(reason));
 
    /* Get verification message from verification return code */
-   ssl_crt_verify_info(reason, sizeof(reason), csp->server_cert_verification_result);
+   ssl_crt_verify_info(reason, sizeof(reason), csp);
 
    /*
     * Computing total length of message with all certificates inside

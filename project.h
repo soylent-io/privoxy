@@ -1113,8 +1113,24 @@ struct client_state
    char *error_message;
 
 #ifdef FEATURE_HTTPS_INSPECTION
-   /* Result of server certificate verification */
+   /* Result of server certificate verification
+    *
+    * Values for flag determining certificate validity
+    * are compatible with return value of function
+    * mbedtls_ssl_get_verify_result() for mbedtls
+    * and SSL_get_verify_result() for openssl.
+    * There are no values for "invalid certificate", they are
+    * set by the functions mentioned above.
+    */
+#define SSL_CERT_VALID          0
+#ifdef FEATURE_HTTPS_INSPECTION_MBEDTLS
+#define SSL_CERT_NOT_VERIFIED   0xFFFFFFFF
    uint32_t server_cert_verification_result;
+#endif /* FEATURE_HTTPS_INSPECTION_MBEDTLS */
+#ifdef FEATURE_HTTPS_INSPECTION_OPENSSL
+#define SSL_CERT_NOT_VERIFIED    ~0L
+   long server_cert_verification_result;
+#endif /* FEATURE_HTTPS_INSPECTION_OPENSSL */
 
    /* Flag for certificate validity checking */
    int dont_verify_certificate;

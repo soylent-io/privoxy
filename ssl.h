@@ -31,16 +31,6 @@
 
 #include "project.h"
 
-/*
- * Values for flag determining certificate validity.
- * These values are compatible with return value of function
- * mbedtls_ssl_get_verify_result(). There is no value for
- * "invalid certificate", this value is set by the function
- * mbedtls_ssl_get_verify_result().
- */
-#define SSL_CERT_VALID          0
-#define SSL_CERT_NOT_VERIFIED   0xFFFFFFFF
-
 /* Boolean functions to get information about TLS/SSL connections */
 extern int    client_use_ssl(const struct client_state *csp);
 extern int    server_use_ssl(const struct client_state *csp);
@@ -65,7 +55,7 @@ extern void close_client_ssl_connection(struct client_state *csp);
 /* misc helper functions */
 extern int ssl_base64_encode(unsigned char *dst, size_t dlen, size_t *olen,
                              const unsigned char *src, size_t slen );
-extern void ssl_crt_verify_info(char *buf, size_t size, uint32_t verification_result);
+extern void ssl_crt_verify_info(char *buf, size_t size, struct client_state *csp);
 extern void ssl_release(void);
 
 #endif /* ndef SSL_H_INCLUDED */
