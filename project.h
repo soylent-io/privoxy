@@ -45,6 +45,15 @@
 #include "config.h"
 
 #ifdef FEATURE_HTTPS_INSPECTION
+/*
+* Macros for SSL structures
+*/
+#define CERT_INFO_BUF_SIZE         4096
+#define CERT_FILE_BUF_SIZE         16384
+#define ISSUER_NAME_BUF_SIZE       2048
+#define HASH_OF_HOST_BUF_SIZE      16
+#endif /* FEATURE_HTTPS_INSPECTION */
+
 #ifdef FEATURE_PTHREAD
 #  include <pthread.h>
    typedef pthread_mutex_t privoxy_mutex_t;
@@ -55,6 +64,7 @@
    typedef CRITICAL_SECTION privoxy_mutex_t;
 #endif
 
+#ifdef FEATURE_HTTPS_INSPECTION_MBEDTLS
 #include "mbedtls/net_sockets.h"
 #include "mbedtls/entropy.h"
 #include "mbedtls/ctr_drbg.h"
@@ -62,15 +72,18 @@
 #if defined(MBEDTLS_SSL_CACHE_C)
 #include "mbedtls/ssl_cache.h"
 #endif
+#endif /* FEATURE_HTTPS_INSPECTION_MBEDTLS */
 
-/*
-* Macros for SSL structures
-*/
-#define CERT_INFO_BUF_SIZE         4096
-#define CERT_FILE_BUF_SIZE         16384
-#define ISSUER_NAME_BUF_SIZE       2048
-#define HASH_OF_HOST_BUF_SIZE      16
+#ifdef FEATURE_HTTPS_INSPECTION_OPENSSL
+#ifdef _WIN32
+#include <wincrypt.h>
+#undef X509_NAME
+#undef X509_EXTENSIONS
 #endif
+#include <openssl/ssl.h>
+#include <openssl/bio.h>
+#include <openssl/err.h>
+#endif /* FEATURE_HTTPS_INSPECTION_OPENSSL */
 
 /* Need for struct sockaddr_storage */
 #ifdef HAVE_RFC2553
@@ -287,7 +300,7 @@ struct map
    struct map_entry *last;
 };
 
-#ifdef FEATURE_HTTPS_INSPECTION
+#ifdef FEATURE_HTTPS_INSPECTION_MBEDTLS
 /*
  * Struct of attributes necessary for TLS/SSL connection
  */
@@ -298,13 +311,23 @@ typedef struct {
    mbedtls_x509_crt         server_cert;
    mbedtls_x509_crt         ca_cert;
    mbedtls_pk_context       prim_key;
+   int                     *ciphersuites_list;
 
    #if defined(MBEDTLS_SSL_CACHE_C)
       mbedtls_ssl_cache_context cache;
    #endif
 } mbedtls_connection_attr;
-#endif
+#endif /* FEATURE_HTTPS_INSPECTION_MBEDTLS */
 
+#ifdef FEATURE_HTTPS_INSPECTION_OPENSSL
+/*
+ * Struct of attributes necessary for TLS/SSL connection
+ */
+typedef struct {
+   SSL_CTX *ctx;
+   BIO *bio;
+} openssl_connection_attr;
+#endif /* FEATURE_HTTPS_INSPECTION_OPENSSL */
 /**
  * A HTTP request.  This includes the method (GET, POST) and
  * the parsed URL.
@@ -331,11 +354,9 @@ struct http_request
    char *host_ip_addr_str; /**< String with dotted decimal representation
                                 of host's IP. NULL before connect_to() */
 
-#ifndef FEATURE_EXTENDED_HOST_PATTERNS
    char  *dbuffer; /**< Buffer with '\0'-delimited domain name.           */
    char **dvec;    /**< List of pointers to the strings in dbuffer.       */
    int    dcount;  /**< How many parts to this domain? (length of dvec)   */
-#endif /* ndef FEATURE_EXTENDED_HOST_PATTERNS */
 
 #ifdef FEATURE_HTTPS_INSPECTION
    int client_ssl;                                                  /**< Flag if we should communicate with client over ssl   */
@@ -396,14 +417,14 @@ struct http_response
 
 struct url_spec
 {
-#ifdef FEATURE_EXTENDED_HOST_PATTERNS
+#ifdef FEATURE_PCRE_HOST_PATTERNS
    regex_t *host_regex;/**< Regex for host matching                          */
-#else
+   enum host_regex_type { VANILLA_HOST_PATTERN, PCRE_HOST_PATTERN } host_regex_type;
+#endif /* defined FEATURE_PCRE_HOST_PATTERNS */
    char  *dbuffer;     /**< Buffer with '\0'-delimited domain name, or NULL to match all hosts. */
    char **dvec;        /**< List of pointers to the strings in dbuffer.       */
    int    dcount;      /**< How many parts to this domain? (length of dvec)   */
    int    unanchored;  /**< Bitmap - flags are ANCHOR_LEFT and ANCHOR_RIGHT.  */
-#endif /* defined FEATURE_EXTENDED_HOST_PATTERNS */
 
    char  *port_list;   /**< List of acceptable ports, or NULL to match all ports */
 
@@ -471,13 +492,6 @@ struct iob
    char *eod;    /**< End of relevant data   */
    size_t size;  /**< Size as malloc()ed     */
 };
-
-
-/**
- * Return the number of bytes in the I/O buffer associated with the passed
- * I/O buffer. May be zero.
- */
-#define IOB_PEEK(IOB) ((IOB->cur > IOB->eod) ? (IOB->eod - IOB->cur) : 0)
 
 
 /* Bits for csp->content_type bitmask: */
@@ -758,6 +772,9 @@ struct reusable_connection
    enum forwarder_type forwarder_type;
    char *gateway_host;
    int  gateway_port;
+   char *auth_username;
+   char *auth_password;
+
    char *forward_host;
    int  forward_port;
 };
@@ -962,6 +979,14 @@ struct reusable_connection
  */
 #define MAX_LISTENING_SOCKETS 10
 
+struct ssl_attr {
+#ifdef FEATURE_HTTPS_INSPECTION_MBEDTLS
+   mbedtls_connection_attr  mbedtls_attr; /* Mbed TLS attrs*/
+#endif /* FEATURE_HTTPS_INSPECTION_MBEDTLS */
+#ifdef FEATURE_HTTPS_INSPECTION_OPENSSL
+   openssl_connection_attr  openssl_attr; /* OpenSSL atrrs */
+#endif /* FEATURE_HTTPS_INSPECTION_OPENSSL */
+};
 /**
  * The state of a Privoxy processing thread.
  */
@@ -1016,10 +1041,8 @@ struct client_state
    /* XXX: should be renamed to server_iob */
    struct iob iob[1];
 
-#ifdef FEATURE_HTTPS_INSPECTION
-   mbedtls_connection_attr  mbedtls_server_attr; /* attributes for connection to server */
-   mbedtls_connection_attr  mbedtls_client_attr; /* attributes for connection to client */
-#endif
+   struct ssl_attr ssl_server_attr; /* attributes for connection to server */
+   struct ssl_attr ssl_client_attr; /* attributes for connection to client */
 
    /** An I/O buffer used for buffering data read from the client */
    struct iob client_iob[1];
@@ -1090,8 +1113,24 @@ struct client_state
    char *error_message;
 
 #ifdef FEATURE_HTTPS_INSPECTION
-   /* Result of server certificate verification */
+   /* Result of server certificate verification
+    *
+    * Values for flag determining certificate validity
+    * are compatible with return value of function
+    * mbedtls_ssl_get_verify_result() for mbedtls
+    * and SSL_get_verify_result() for openssl.
+    * There are no values for "invalid certificate", they are
+    * set by the functions mentioned above.
+    */
+#define SSL_CERT_VALID          0
+#ifdef FEATURE_HTTPS_INSPECTION_MBEDTLS
+#define SSL_CERT_NOT_VERIFIED   0xFFFFFFFF
    uint32_t server_cert_verification_result;
+#endif /* FEATURE_HTTPS_INSPECTION_MBEDTLS */
+#ifdef FEATURE_HTTPS_INSPECTION_OPENSSL
+#define SSL_CERT_NOT_VERIFIED    ~0L
+   long server_cert_verification_result;
+#endif /* FEATURE_HTTPS_INSPECTION_OPENSSL */
 
    /* Flag for certificate validity checking */
    int dont_verify_certificate;
@@ -1549,6 +1588,9 @@ struct configuration_spec
 
    /** Directory for saving certificates and keys for each webpage **/
    char *certificate_directory;
+
+   /** Cipher list to use **/
+   char *cipher_list;
 
    /** Filename of trusted CAs certificates **/
    char * trusted_cas_file;
