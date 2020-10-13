@@ -248,6 +248,12 @@ static const struct filter_type_info filter_type_info[] =
       "E", "EXTERNAL-CONTENT-FILTER"
    },
 #endif
+   {
+      ACTION_MULTI_SUPPRESS_TAGGER,
+      "suppress-tagger-params", "suppress-tagger",
+      "suppress-tagger-all", "suppress_tagger_all",
+      "U", "SUPPRESS-TAGGER"
+   },
 };
 
 /* FIXME: Following non-static functions should be prototyped in .h or made static */
@@ -3164,6 +3170,9 @@ jb_err cgi_edit_actions_submit(struct client_state *csp,
             break;
          case 'E':
             multi_action_index = ACTION_MULTI_SERVER_HEADER_TAGGER;
+            break;
+         case 'U':
+            multi_action_index = ACTION_MULTI_SUPPRESS_TAGGER;
             break;
          default:
             log_error(LOG_LEVEL_ERROR,

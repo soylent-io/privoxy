@@ -1142,6 +1142,7 @@ function show_limit_connect_opts(tf)
         you can enable or disable the taggers individually below.</td>
     </tr>
 @server-header-tagger-params@
+@suppress-tagger-params@
     <tr class="bg1" align="left" valign="top">
       <td class="en1" align="center" valign="middle"><input type="radio"
         name="session_cookies_only" value="Y" @session-cookies-only-y@

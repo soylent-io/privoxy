@@ -1115,6 +1115,8 @@ static const char *filter_type_to_string(enum filter_type filter_type)
    case FT_EXTERNAL_CONTENT_FILTER:
       return "external content filter";
 #endif
+   case FT_SUPPRESS_TAGGER:
+      return "suppress tagger";
    case FT_INVALID_FILTER:
       return "invalid filter type";
    }
@@ -1196,8 +1198,21 @@ static int action_spec_is_valid(struct client_state *csp, const struct action_sp
          filter_map[i].multi_index, filter_map[i].filter_type);
    }
 
-   return errors;
+   for (struct list_entry *filtername = cur_action->multi_add[ACTION_MULTI_SUPPRESS_TAGGER]->first;
+        filtername; filtername = filtername->next)
+   {
+      if (NULL == get_filter(csp, filtername->str, FT_CLIENT_HEADER_TAGGER) &&
+          NULL == get_filter(csp, filtername->str, FT_SERVER_HEADER_TAGGER))
+      {
+         log_error(LOG_LEVEL_ERROR, "Missing %s or %s '%s'",
+            filter_type_to_string(FT_CLIENT_HEADER_TAGGER),
+            filter_type_to_string(FT_SERVER_HEADER_TAGGER),
+            filtername->str);
+         errors += 1;
+      }
+   }
 
+   return errors;
 }
 
 

@@ -1420,7 +1420,6 @@ jb_err update_server_headers(struct client_state *csp)
    return err;
 }
 
-
 /*********************************************************************
  *
  * Function    :  header_tagger
@@ -1479,6 +1478,11 @@ static jb_err header_tagger(struct client_state *csp, char *header)
       b = get_filter(csp, tag_name->str, wanted_filter_type);
       if (b == NULL)
       {
+         continue;
+      }
+
+      if (list_contains_item(csp->action->multi[ACTION_MULTI_SUPPRESS_TAGGER], b->name)) {
+         log_error(LOG_LEVEL_HEADER, "Tagger \'%s\' suppressed", b->name);
          continue;
       }
 

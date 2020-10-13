@@ -1101,7 +1101,7 @@ int load_one_re_filterfile(struct client_state *csp, int fileid)
 {
    FILE *fp;
 
-   struct re_filterfile_spec *new_bl, *bl = NULL;
+   struct re_filterfile_spec *new_bl, *next_bl, *bl = NULL;
    struct file_list *fs;
 
    char *buf = NULL;
@@ -1209,6 +1209,18 @@ int load_one_re_filterfile(struct client_state *csp, int fileid)
 
          new_bl->name = strdup_or_die(chomp(new_bl->name));
 
+         next_bl = new_bl;
+         if (new_filter == FT_CLIENT_HEADER_TAGGER || new_filter == FT_SERVER_HEADER_TAGGER)
+         {
+            // register extra FT_SUPPRESS_TAG filter
+            struct re_filterfile_spec *supp_bl = zalloc_or_die(sizeof(*supp_bl));
+            supp_bl->type = FT_SUPPRESS_TAGGER;
+            supp_bl->name = strdup_or_die(new_bl->name);
+            supp_bl->description = strdup_or_die(new_bl->name);
+            supp_bl->next = new_bl;
+            next_bl = supp_bl;
+         }
+
          /*
           * If this is the first filter block, chain it
           * to the file_list rather than its (nonexistent)
@@ -1216,12 +1228,12 @@ int load_one_re_filterfile(struct client_state *csp, int fileid)
           */
          if (fs->f == NULL)
          {
-            fs->f = new_bl;
+            fs->f = next_bl;
          }
          else
          {
             assert(NULL != bl);
-            bl->next = new_bl;
+            bl->next = next_bl;
          }
          bl = new_bl;
 
