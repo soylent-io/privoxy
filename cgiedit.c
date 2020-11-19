@@ -2745,12 +2745,6 @@ jb_err cgi_edit_actions_for_url(struct client_state *csp,
       return JB_ERR_MEMORY;
    }
 
-   err = map(exports, "f", 1, stringify(file->identifier), 0);
-   if (!err) err = map(exports, "v", 1, file->version_str, 1);
-   if (!err) err = map(exports, "s", 1, url_encode(lookup(parameters, "s")), 0);
-
-   if (!err) err = actions_to_radio(exports, cur_line->data.action);
-
    err = template_load(csp, &filter_template, "edit-actions-for-url-string-filter", 0);
    if (err)
    {
@@ -2759,7 +2753,13 @@ jb_err cgi_edit_actions_for_url(struct client_state *csp,
        return cgi_error_no_template(csp, rsp, "edit-actions-for-url-string-filter");
    }
 
-   err = action_render_string_filters_template(exports, cur_line->data.action, filter_template,
+   err = map(exports, "f", 1, stringify(file->identifier), 0);
+   if (!err) err = map(exports, "v", 1, file->version_str, 1);
+   if (!err) err = map(exports, "s", 1, url_encode(lookup(parameters, "s")), 0);
+
+   if (!err) err = actions_to_radio(exports, cur_line->data.action);
+
+   if (!err) err = action_render_string_filters_template(exports, cur_line->data.action, filter_template,
                                                &filter_type_info[FT_SUPPRESS_TAG]);
    freez(filter_template);
 
@@ -2915,7 +2915,7 @@ jb_err cgi_edit_actions_for_url(struct client_state *csp,
                      if (filter_line == NULL) err = JB_ERR_MEMORY;
                   }
                   if (!err) err = template_fill(&filter_line, line_exports);
-                  string_join(&prepared_templates[type], filter_line);
+                  if (!err) err = string_join(&prepared_templates[type], filter_line);
 
                   free_map(line_exports);
                }
@@ -3218,7 +3218,6 @@ jb_err cgi_edit_actions_submit(struct client_state *csp,
    }
 
    /* process existing suppress tag */
-   filter_identifier = 0;
    for (filter_identifier = 0; !err; filter_identifier++)
    {
       char key_value[30];
@@ -3239,7 +3238,7 @@ jb_err cgi_edit_actions_submit(struct client_state *csp,
       /* Generate the keys */
       snprintf(key_value, sizeof(key_value), "string_filter_r%x", filter_identifier);
       snprintf(key_name, sizeof(key_name), "string_filter_n%x", filter_identifier);
-      snprintf(old_name, sizeof(key_name), "string_filter_o%x", filter_identifier);
+      snprintf(old_name, sizeof(old_name), "string_filter_o%x", filter_identifier);
       snprintf(key_type, sizeof(key_type), "string_filter_t%x", filter_identifier);
 
       err = get_string_param(parameters, old_name, &name);
@@ -3247,7 +3246,7 @@ jb_err cgi_edit_actions_submit(struct client_state *csp,
 
       if (name == NULL)
       {
-         /* The filter identifier isn't present: we've done! */
+         /* The filter identifier isn't present: we're done! */
          break;
       }
 
@@ -3269,24 +3268,20 @@ jb_err cgi_edit_actions_submit(struct client_state *csp,
       assert(multi_action_index);
 
       value = get_char_param(parameters, key_value);
-      if (value == 'Y')
-      {
-         list_remove_item(cur_line->data.action->multi_add[multi_action_index], name);
-         if (!err) err = enlist(cur_line->data.action->multi_add[multi_action_index], new_name);
-         list_remove_item(cur_line->data.action->multi_remove[multi_action_index], name);
-      }
-      else if (value == 'N')
-      {
-         list_remove_item(cur_line->data.action->multi_add[multi_action_index], name);
-         list_remove_item(cur_line->data.action->multi_remove[multi_action_index], name);
-         if (!err) err = enlist(cur_line->data.action->multi_remove[multi_action_index], new_name);
-      }
-      else if (value == 'X')
+      if (value == 'X' || value == 'Y' || value == 'N')
       {
          list_remove_item(cur_line->data.action->multi_add[multi_action_index], name);
          list_remove_item(cur_line->data.action->multi_remove[multi_action_index], name);
       }
 
+      if (value == 'Y')
+      {
+         err = enlist(cur_line->data.action->multi_add[multi_action_index], new_name);
+      }
+      else if (value == 'N')
+      {
+         err = enlist(cur_line->data.action->multi_remove[multi_action_index], new_name);
+      }
    }
 
    /* process new string filters */
@@ -4438,7 +4433,7 @@ static jb_err action_render_string_filters_template(struct map * exports,
        { 'n', action->multi_remove[type->multi_action_index][0].first }
    };
 
-   for (int i=0; i < (sizeof(desc)/sizeof(desc[0])); ++i)
+   for (int i=0; i < SZ(desc); ++i)
    {
       const char radio = desc[i].radio;
       struct list_entry *entry = desc[i].list;
@@ -4449,7 +4444,6 @@ static jb_err action_render_string_filters_template(struct map * exports,
 
          /* Generate a unique serial number */
          snprintf(number, sizeof(number), "%x", filter_identifier++);
-         number[sizeof(number) - 1] = '\0';
 
          line_exports = new_map();
          if (line_exports == NULL)
@@ -4471,7 +4465,7 @@ static jb_err action_render_string_filters_template(struct map * exports,
                if (filter_line == NULL) err = JB_ERR_MEMORY;
             }
             if (!err) err = template_fill(&filter_line, line_exports);
-            string_join(&prepared_template, filter_line);
+            if (!err) err = string_join(&prepared_template, filter_line);
 
             free_map(line_exports);
         }
