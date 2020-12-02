@@ -78,6 +78,7 @@
 #include "jcc.h"
 /* jcc.h is for mutex semapores only */
 #endif /* def FEATURE_PTHREAD */
+#include "encode.h"
 #include "list.h"
 #include "parsers.h"
 #include "ssplit.h"
@@ -144,6 +145,7 @@ static jb_err client_keep_alive(struct client_state *csp, char **header);
 static jb_err client_proxy_connection(struct client_state *csp, char **header);
 #endif /* def FEATURE_CONNECTION_KEEP_ALIVE */
 
+static jb_err client_save_content_type(struct client_state *csp, char **header);
 static jb_err client_save_content_length(struct client_state *csp, char **header);
 static jb_err client_host_adder       (struct client_state *csp);
 static jb_err client_xtra_adder       (struct client_state *csp);
@@ -188,6 +190,7 @@ static const struct parsers client_patterns[] = {
    { "TE:",                       3,   client_te },
    { "Host:",                     5,   client_host },
    { "if-modified-since:",       18,   client_if_modified_since },
+   { "Content-Type:",            13,   client_save_content_type },
    { "Content-Length:",          15,   client_save_content_length },
 #ifdef FEATURE_CONNECTION_KEEP_ALIVE
    { "Keep-Alive:",              11,   client_keep_alive },
@@ -308,7 +311,7 @@ long flush_iob(jb_socket fd, struct iob *iob, unsigned int delay)
  *                or buffer limit reached.
  *
  *********************************************************************/
-jb_err add_to_iob(struct iob *iob, const size_t buffer_limit, char *src, long n)
+jb_err add_to_iob(struct iob *iob, const size_t buffer_limit, const char *src, long n)
 {
    size_t used, offset, need;
    char *p;
@@ -1996,16 +1999,51 @@ static jb_err get_content_length(const char *header_value, unsigned long long *l
 
 /*********************************************************************
  *
+ * Function    :  client_save_content_type
+ *
+ * Description :  Save the conent type and multipart/form-data boundary sent by the client.
+ *
+ * Parameters  :
+ *          1  :  csp = Current client state (buffers, headers, etc...)
+ *          2  :  header = pointer to header to content-type header
+ *
+ * Returns     :  JB_ERR_OK on success, or
+ *                JB_ERR_MEMORY on out-of-memory error.
+ *
+ *********************************************************************/
+static jb_err client_save_content_type(struct client_state *csp, char **header)
+{
+   static const char BOUNDARY[] = "boundary=";
+   static const char MULTIPART[] = "multipart/form-data";
+   const char *p;
+
+   assert(*(*header+12) == ':');
+
+   p = *header + 13;
+
+   if (strstr(p, "application/x-www-form-urlencoded"))
+      csp->content_type |= CT_URLENCODED;
+   else if (strstr(p, "text/"))
+      csp->content_type |= CT_TEXT;
+   else if (NULL != (p = strstr(p, MULTIPART)))
+   {
+      p = strstr(p + sizeof(MULTIPART) - 1, BOUNDARY);
+      if (p != NULL)
+         csp->multipart_form_boundary_start = p + sizeof(BOUNDARY) - 1;
+   }
+   return JB_ERR_OK;
+}
+
+
+/*********************************************************************
+ *
  * Function    :  client_save_content_length
  *
  * Description :  Save the Content-Length sent by the client.
  *
  * Parameters  :
  *          1  :  csp = Current client state (buffers, headers, etc...)
- *          2  :  header = On input, pointer to header to modify.
- *                On output, pointer to the modified header, or NULL
- *                to remove the header.  This function frees the
- *                original string if necessary.
+ *          2  :  header = pointer to header to content-length header
  *
  * Returns     :  JB_ERR_OK on success, or
  *                JB_ERR_MEMORY on out-of-memory error.
@@ -2618,6 +2656,37 @@ static jb_err server_adjust_content_encoding(struct client_state *csp, char **he
 
 /*********************************************************************
  *
+ * Function    :  header_adjust_content_length
+ *
+ * Description :  Replace given header with new Content-Length header
+ *
+ * Parameters  :
+ *          1  :  header = On input, pointer to header to modify.
+ *                On output, pointer to the modified header, or NULL
+ *                to remove the header.  This function frees the
+ *                original string if necessary.
+ *          2  :  content_length = content length value
+ *
+ * Returns     :  JB_ERR_OK on success, or
+ *                JB_ERR_MEMORY on out-of-memory error.
+ *
+ *********************************************************************/
+jb_err header_adjust_content_length(char **header, size_t content_length)
+{
+   const size_t header_length = 50;
+   freez(*header);
+   *header = malloc(header_length);
+   if (*header == NULL)
+   {
+      return JB_ERR_MEMORY;
+   }
+   create_content_length_header(content_length, *header, header_length);
+   return JB_ERR_OK;
+}
+
+
+/*********************************************************************
+ *
  * Function    :  server_adjust_content_length
  *
  * Description :  Adjust Content-Length header if we modified
@@ -2639,14 +2708,8 @@ static jb_err server_adjust_content_length(struct client_state *csp, char **head
    /* Regenerate header if the content was modified. */
    if (csp->flags & CSP_FLAG_MODIFIED)
    {
-      const size_t header_length = 50;
-      freez(*header);
-      *header = malloc(header_length);
-      if (*header == NULL)
-      {
+      if (JB_ERR_OK != header_adjust_content_length(header, csp->content_length))
          return JB_ERR_MEMORY;
-      }
-      create_content_length_header(csp->content_length, *header, header_length);
       log_error(LOG_LEVEL_HEADER,
          "Adjusted Content-Length to %llu", csp->content_length);
    }
@@ -4931,6 +4994,86 @@ unsigned long long get_expected_content_length(struct list *headers)
    }
 
    return content_length;
+}
+
+
+/*********************************************************************
+ *
+ * Function    :  parse_url_encoded_string
+ *
+ * Description :  Parse a URL-encoded argument string into name/value
+ *                pairs and store them in a struct map list.
+ *
+ * Parameters  :
+ *          1  :  argstring = string to be parsed.  Will be trashed.
+ *
+ * Returns     :  pointer to param list, or NULL if out of memory.
+ *
+ *********************************************************************/
+struct map *parse_url_encoded_string(char *argstring)
+{
+   char *p;
+   char **vector;
+   int pairs, i;
+   struct map *cgi_params;
+
+   /*
+    * XXX: This estimate is guaranteed to be high enough as we
+    *      let ssplit() ignore empty fields, but also a bit wasteful.
+    *      The same hack is used in get_last_url() so it looks like
+    *      a real solution is needed.
+    */
+   size_t max_segments = strlen(argstring) / 2;
+   if (max_segments == 0)
+   {
+      /*
+       * XXX: If the argstring is empty, there's really
+       *      no point in creating a param list, but currently
+       *      other parts of Privoxy depend on the list's existence.
+       */
+      max_segments = 1;
+   }
+   vector = malloc_or_die(max_segments * sizeof(char *));
+
+   cgi_params = new_map();
+
+   /*
+    * IE 5 does, of course, violate RFC 2316 Sect 4.1 and sends
+    * the fragment identifier along with the request, so we must
+    * cut it off here, so it won't pollute the CGI params:
+    */
+   if (NULL != (p = strchr(argstring, '#')))
+   {
+      *p = '\0';
+   }
+
+   pairs = ssplit(argstring, "&", vector, max_segments);
+   assert(pairs != -1);
+   if (pairs == -1)
+   {
+      freez(vector);
+      free_map(cgi_params);
+      return NULL;
+   }
+
+   for (i = 0; i < pairs; i++)
+   {
+      if ((NULL != (p = strchr(vector[i], '='))) && (*(p+1) != '\0'))
+      {
+         *p = '\0';
+         if (map(cgi_params, url_decode(vector[i]), 0, url_decode(++p), 0))
+         {
+            freez(vector);
+            free_map(cgi_params);
+            return NULL;
+         }
+      }
+   }
+
+   freez(vector);
+
+   return cgi_params;
+
 }
 
 

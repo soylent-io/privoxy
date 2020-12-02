@@ -50,7 +50,7 @@
 #define FILTER_SERVER_HEADERS 1
 
 extern long flush_iob(jb_socket fd, struct iob *iob, unsigned int delay);
-extern jb_err add_to_iob(struct iob *iob, const size_t buffer_limit, char *src, long n);
+extern jb_err add_to_iob(struct iob *iob, const size_t buffer_limit, const char *src, long n);
 extern void clear_iob(struct iob *iob);
 extern jb_err decompress_iob(struct client_state *csp);
 extern char *get_header(struct iob *iob);
@@ -59,6 +59,7 @@ extern jb_err sed(struct client_state *csp, int filter_server_headers);
 #ifdef FEATURE_HTTPS_INSPECTION
 extern jb_err sed_https(struct client_state *csp);
 #endif
+extern jb_err header_adjust_content_length(char **header, size_t content_length);
 extern jb_err update_server_headers(struct client_state *csp);
 extern void get_http_time(int time_offset, char *buf, size_t buffer_size);
 extern jb_err get_destination_from_headers(const struct list *headers, struct http_request *http);
@@ -67,6 +68,7 @@ extern jb_err get_destination_from_https_headers(const struct list *headers, str
 #endif
 extern unsigned long long get_expected_content_length(struct list *headers);
 extern jb_err client_transfer_encoding(struct client_state *csp, char **header);
+extern struct map *parse_url_encoded_string(char *argstring);
 
 #ifdef FEATURE_FORCE_LOAD
 extern int strclean(char *string, const char *substring);

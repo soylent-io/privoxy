@@ -240,6 +240,18 @@ static const struct filter_type_info filter_type_info[] =
       "server-header-tagger-all", "server_header_tagger_all",
       "E", "SERVER-HEADER-TAGGER"
    },
+   {
+      ACTION_MULTI_SUPPRESS_TAG,
+      "suppress-tag-params", "suppress-tag",
+      "suppress-tag-all", "suppress_tag_all",
+      "U", "SUPPRESS-TAG"
+   },
+   {
+      ACTION_MULTI_CLIENT_CONTENT_FILTER,
+      "client-content-filter-params", "client-content-filter",
+      "client-content-filter-all", "client_content_filter_all",
+      "P", "CLIENT-CONTENT-FILTER"
+   },
 #ifdef FEATURE_EXTERNAL_FILTERS
    {
       ACTION_MULTI_EXTERNAL_FILTER,
@@ -248,12 +260,6 @@ static const struct filter_type_info filter_type_info[] =
       "E", "EXTERNAL-CONTENT-FILTER"
    },
 #endif
-   {
-      ACTION_MULTI_SUPPRESS_TAG,
-      "suppress-tag-params", "suppress-tag",
-      "suppress-tag-all", "suppress_tag_all",
-      "U", "SUPPRESS-TAG"
-   },
 };
 
 /* FIXME: Following non-static functions should be prototyped in .h or made static */
@@ -3186,6 +3192,9 @@ jb_err cgi_edit_actions_submit(struct client_state *csp,
             break;
          case 'E':
             multi_action_index = ACTION_MULTI_SERVER_HEADER_TAGGER;
+            break;
+         case 'P':
+            multi_action_index = ACTION_MULTI_CLIENT_CONTENT_FILTER;
             break;
          default:
             log_error(LOG_LEVEL_ERROR,

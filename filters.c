@@ -1537,25 +1537,34 @@ struct re_filterfile_spec *get_filter(const struct client_state *csp,
 
 /*********************************************************************
  *
- * Function    :  pcrs_filter_response
+ * Function    :  pcrs_filter_impl
  *
  * Description :  Execute all text substitutions from all applying
- *                +filter actions on the text buffer that's been
- *                accumulated in csp->iob->buf.
+ *                (based on filter_server_headers value) +filter
+ *                or +client_content_filter actions on the given text buffer
  *
  * Parameters  :
  *          1  :  csp = Current client state (buffers, headers, etc...)
+ *          2  :  data = filter_server_headers when TRUE execute +filter
+ *                actions; execute +client_content_filter actions otherwise
+ *          3  :  data = Target data
+ *          4  :  data_len = Target data len
  *
  * Returns     :  a pointer to the (newly allocated) modified buffer.
  *                or NULL if there were no hits or something went wrong
  *
  *********************************************************************/
-static char *pcrs_filter_response(struct client_state *csp)
+static char *pcrs_filter_impl(struct client_state *csp, int filter_server_headers,
+                              const char* data, size_t *data_len)
 {
    int hits = 0;
    size_t size, prev_size;
+   const int filters_idx =
+       filter_server_headers ? ACTION_MULTI_FILTER : ACTION_MULTI_CLIENT_CONTENT_FILTER;
+   const enum filter_type filter_type =
+       filter_server_headers ? FT_CONTENT_FILTER : FT_CLIENT_CONTENT_FILTER;
 
-   char *old = NULL;
+   const char *old = NULL;
    char *new = NULL;
    pcrs_job *job;
 
@@ -1565,10 +1574,8 @@ static char *pcrs_filter_response(struct client_state *csp)
    /*
     * Sanity first
     */
-   if (csp->iob->cur >= csp->iob->eod)
-   {
-      return(NULL);
-   }
+   if (*data_len == 0)
+      return NULL;
 
    if (filters_available(csp) == FALSE)
    {
@@ -1577,15 +1584,15 @@ static char *pcrs_filter_response(struct client_state *csp)
       return(NULL);
    }
 
-   size = (size_t)(csp->iob->eod - csp->iob->cur);
-   old = csp->iob->cur;
+   size = *data_len;
+   old = data;
 
    /*
-    * For all applying +filter actions, look if a filter by that
+    * For all applying actions, look if a filter by that
     * name exists and if yes, execute it's pcrs_joblist on the
     * buffer.
     */
-   for (filtername = csp->action->multi[ACTION_MULTI_FILTER]->first;
+   for (filtername = csp->action->multi[filters_idx]->first;
         filtername != NULL; filtername = filtername->next)
    {
       int current_hits = 0; /* Number of hits caused by this filter */
@@ -1593,7 +1600,7 @@ static char *pcrs_filter_response(struct client_state *csp)
       int job_hits     = 0; /* How many hits the current job caused */
       pcrs_job *joblist;
 
-      b = get_filter(csp, filtername->str, FT_CONTENT_FILTER);
+      b = get_filter(csp, filtername->str, filter_type);
       if (b == NULL)
       {
          continue;
@@ -1624,7 +1631,7 @@ static char *pcrs_filter_response(struct client_state *csp)
              * input for the next one.
              */
             current_hits += job_hits;
-            if (old != csp->iob->cur)
+            if (old != data)
             {
                freez(old);
             }
@@ -1657,8 +1664,8 @@ static char *pcrs_filter_response(struct client_state *csp)
       if (b->dynamic) pcrs_free_joblist(joblist);
 
       log_error(LOG_LEVEL_RE_FILTER,
-         "filtering %s%s (size %lu) with \'%s\' produced %d hits (new size %lu).",
-         csp->http->hostport, csp->http->path, prev_size, b->name, current_hits, size);
+         "filtering client %s request (size %lu) with \'%s\' produced %d hits (new size %lu).",
+         csp->ip_addr_str, prev_size, b->name, current_hits, size);
 #ifdef FEATURE_EXTENDED_STATISTICS
       update_filter_statistics(b->name, current_hits);
 #endif
@@ -1667,11 +1674,11 @@ static char *pcrs_filter_response(struct client_state *csp)
 
    /*
     * If there were no hits, destroy our copy and let
-    * chat() use the original in csp->iob
+    * chat() use the original content
     */
    if (!hits)
    {
-      if (old != csp->iob->cur && old != new)
+      if (old != data && old != new)
       {
          freez(old);
       }
@@ -1679,12 +1686,50 @@ static char *pcrs_filter_response(struct client_state *csp)
       return(NULL);
    }
 
-   csp->flags |= CSP_FLAG_MODIFIED;
-   csp->content_length = size;
-   clear_iob(csp->iob);
+   *data_len = size;
+   return(new);
+}
+
+
+/*********************************************************************
+ *
+ * Function    :  pcrs_filter_response
+ *
+ * Description :  Execute all text substitutions from all applying
+ *                +filter actions on the text buffer that's been
+ *                accumulated in csp->iob->buf.
+ *
+ * Parameters  :
+ *          1  :  csp = Current client state (buffers, headers, etc...)
+ *
+ * Returns     :  a pointer to the (newly allocated) modified buffer.
+ *                or NULL if there were no hits or something went wrong
+ *
+ *********************************************************************/
+static char *pcrs_filter_response(struct client_state *csp)
+{
+   size_t size = (size_t)(csp->iob->eod - csp->iob->cur);
+
+   char *new = NULL;
+
+   /*
+    * Sanity first
+    */
+   if (csp->iob->cur >= csp->iob->eod)
+   {
+      return(NULL);
+   }
+
+   new = pcrs_filter_impl(csp, TRUE, csp->iob->cur, &size);
+
+   if (new != NULL)
+   {
+      csp->flags |= CSP_FLAG_MODIFIED;
+      csp->content_length = size;
+      clear_iob(csp->iob);
+   }
 
    return(new);
-
 }
 
 
@@ -1913,6 +1958,28 @@ static char *execute_external_filter(const struct client_state *csp,
 
 }
 #endif /* def FEATURE_EXTERNAL_FILTERS */
+
+
+/*********************************************************************
+ *
+ * Function    :  pcrs_filter_request
+ *
+ * Description :  Execute all text substitutions from all applying
+ *                +client_content_filter actions on the given text buffer
+ *
+ * Parameters  :
+ *          1  :  csp = Current client state (buffers, headers, etc...)
+ *          2  :  data = Target data
+ *          3  :  data_len = Target data len
+ *
+ * Returns     :  a pointer to the (newly allocated) modified buffer.
+ *                or NULL if there were no hits or something went wrong
+ *
+ *********************************************************************/
+static char *pcrs_filter_request(struct client_state *csp, const char* data, size_t *data_len)
+{
+   return pcrs_filter_impl(csp, FALSE, data, data_len);
+}
 
 
 /*********************************************************************
@@ -2298,6 +2365,292 @@ char *execute_content_filters(struct client_state *csp)
 
    return content;
 
+}
+
+
+/*********************************************************************
+ *
+ * Function    :  multipart_content_type_text
+ *
+ * Description :  Checks if the given multipart content headers denote text.
+ *
+ * Parameters  :
+ *          1  :  headers_start = form part headers start
+ *          2  :  headers_end = form part headers start
+ *
+ * Returns     :  1 if no content type is set or content type is text
+ *                0 otherwise
+ *
+ *********************************************************************/
+static int multipart_content_type_text(const char* headers_start, const char* headers_end)
+{
+   static const char CONTENT_TYPE[] = "Content-Type:";
+
+   const char *ct_start = strnstr(headers_start, CONTENT_TYPE,
+                                  (size_t)(headers_end - headers_start));
+   const char *ct_end;
+
+   if (!ct_start)
+      return 1;
+
+   ct_start += sizeof(CONTENT_TYPE) - 1;
+   ct_end = strnstr(ct_start, "\r\n", (size_t)(headers_end - ct_start));
+   /* filter_miltipart_form_data() implementation guarantees that there must be end marker! */
+   assert(ct_end);
+
+   return strnstr(ct_start, "text", (size_t)(ct_end - ct_start)) != NULL;
+}
+
+
+/*********************************************************************
+ *
+ * Function    :  filter_urlencoded_form_data
+ *
+ * Description :  Executes a given client content filter for
+ *                application/x-www-form-urlencoded form data.
+ *                Upon success moves client_iob cur pointer to the end of
+ *                the form data.
+ *
+ * Parameters  :
+ *          1  :  csp = Current client state (buffers, headers, etc...)
+ *          2  :  content_length = content length. Upon successful filtering
+ *                the passed value is updated with the new content length.
+ *
+ * Returns     :  Pointer to the modified buffer, or
+ *                NULL if filtering failed or wasn't necessary.
+ *
+ *********************************************************************/
+static char *filter_urlencoded_form_data(struct client_state *csp, size_t *content_length)
+{
+   size_t len;
+   const char *tmp = NULL;
+   char *params = NULL;
+   char *ret = NULL;
+   struct map *parsed = NULL;
+   const struct map_entry *cur_entry;
+   struct iob dest = {0};
+
+   /* copy original data: parse_url_encoded_string() will trash it */
+   len = *content_length + 1;
+   params = malloc_or_die(len);
+   memcpy(params, csp->client_iob->cur, len);
+   params[len - 1] = 0;
+
+   parsed = parse_url_encoded_string(params);
+   if (parsed == NULL)
+   {
+      log_error(LOG_LEVEL_RE_FILTER, "Can not parse urlencoded data");
+      goto error;
+   }
+
+   for (cur_entry = parsed->first; cur_entry != NULL; cur_entry = cur_entry->next)
+   {
+      size_t value_len = strlen(cur_entry->value);
+      char* filtered;
+
+      tmp = url_encode(cur_entry->name);
+      if (add_to_iob(&dest, csp->config->buffer_limit, tmp, (long)strlen(tmp)))
+         goto error;
+      freez(tmp);
+      if (add_to_iob(&dest, csp->config->buffer_limit, "=", 1))
+         goto error;
+      filtered = pcrs_filter_request(csp, cur_entry->value, &value_len);
+      if (filtered == NULL)
+      {
+         tmp = url_encode(cur_entry->value);
+      }
+      else
+      {
+         tmp = url_encode(filtered);
+         value_len = strlen(tmp);
+         freez(filtered);
+      }
+      if (add_to_iob(&dest, csp->config->buffer_limit, tmp, (long)value_len))
+         goto error;
+
+      if (cur_entry->next != NULL && add_to_iob(&dest, csp->config->buffer_limit, "&", 1))
+         goto error;
+      freez(tmp);
+   }
+
+   if (add_to_iob(&dest, csp->config->buffer_limit, "\r\n", 2))
+      goto error;
+
+   csp->client_iob->cur += *content_length;
+   *content_length = (unsigned long long)(dest.eod - dest.buf);
+   ret = dest.buf;
+   dest.buf = NULL;
+
+error:
+   freez(params);
+   freez(tmp);
+   free_map(parsed);
+   freez(dest.buf);
+   return ret;
+}
+
+
+/*********************************************************************
+ *
+ * Function    :  filter_miltipart_form_data
+ *
+ * Description :  Executes a given client content filter for multipart form data.
+ *                Upon success moves client_iob cur pointer to the end of
+ *                the form data.
+ *
+ * Parameters  :
+ *          1  :  csp = Current client state (buffers, headers, etc...)
+ *          2  :  content_length = content length. Upon successful filtering
+ *                the passed value is updated with the new content length.
+ *
+ * Returns     :  Pointer to the modified buffer, or
+ *                NULL if filtering failed or wasn't necessary.
+ *
+ *********************************************************************/
+static char *filter_miltipart_form_data(struct client_state *csp, size_t *content_length)
+{
+   const char *bound_param = csp->multipart_form_boundary_start;
+   size_t bound_len = strlen(csp->multipart_form_boundary_start);
+   const char *old_pos = csp->client_iob->cur;
+   const char *pos;
+   struct iob dest = {0};
+
+   char bound[bound_len + 5];
+
+   if (bound_param[0] == '"')
+   {
+      if (bound_len < 3 || bound_param[bound_len - 1] != '"')
+      {
+         log_error(LOG_LEVEL_RE_FILTER, "Error filtering multipart form data: invalid boundary [%s]", bound);
+         return NULL;
+      }
+      bound_param++;
+      bound_len--;
+   }
+
+   if (snprintf(bound, sizeof(bound), "\r\n--%.*s", (int)bound_len, bound_param) < 0)
+   {
+      log_error(LOG_LEVEL_RE_FILTER, "Error during bound constrution [%s]", bound_param);
+      return NULL;
+   }
+
+   bound_len += 4;
+
+   pos = strstr(old_pos, bound + 2);
+   if (pos == NULL)
+   {
+      log_error(LOG_LEVEL_RE_FILTER, "Error filtering multipart form data: can't find boundary");
+      return NULL;
+   }
+
+   for (pos += bound_len - 2; strncmp(pos, "--\r\n", 4); pos += bound_len)
+   {
+      const char *filtered_data;
+      const char *data_start;
+      size_t data_len;
+      int content_type_text;
+      jb_err error;
+
+      data_start = strstr(pos, "\r\n\r\n");
+      if (data_start == NULL)
+      {
+         log_error(LOG_LEVEL_RE_FILTER, "Error filtering multipart form data: can't find content start");
+         goto error;
+      }
+      data_start += 4;
+      content_type_text = multipart_content_type_text(pos, data_start);
+      pos = strstr(data_start, bound);
+      if (pos == NULL)
+      {
+         log_error(LOG_LEVEL_RE_FILTER, "Error filtering multipart form data: can't find content end");
+         goto error;
+      }
+      if (!content_type_text)
+      {
+         if (add_to_iob(&dest, csp->config->buffer_limit, old_pos, pos - old_pos))
+            goto error;
+         old_pos = pos;
+         continue;
+      }
+      if (add_to_iob(&dest, csp->config->buffer_limit, old_pos, data_start - old_pos))
+         goto error;
+      old_pos = pos;
+      data_len = (size_t)(pos - data_start);
+      filtered_data = pcrs_filter_request(csp, data_start, &data_len);
+      if (filtered_data == NULL)
+      {
+         if (add_to_iob(&dest, csp->config->buffer_limit, data_start, pos - data_start))
+            goto error;
+         continue;
+      }
+      error = add_to_iob(&dest, csp->config->buffer_limit, filtered_data, (long)data_len);
+      freez(filtered_data);
+      if (error)
+         goto error;
+   }
+
+   pos += 4;
+
+   if (add_to_iob(&dest, csp->config->buffer_limit, bound, (long)bound_len))
+      goto error;
+   if (add_to_iob(&dest, csp->config->buffer_limit, "--\r\n", 4))
+      goto error;
+
+   csp->client_iob->cur = (char*)pos;
+   *content_length = (unsigned long long)(dest.eod - dest.buf);
+   return dest.cur;
+
+error:
+   freez(dest.cur);
+   return NULL;
+}
+
+
+/*********************************************************************
+ *
+ * Function    :  execute_client_content_filters
+ *
+ * Description :  Executes a given client content filter.
+ *                Upon success moves client_iob cur pointer to the end of
+ *                the form data.
+ *
+ * Parameters  :
+ *          1  :  csp = Current client state (buffers, headers, etc...)
+ *          2  :  content_length = content length. Upon successful filtering
+ *                the passed value is updated with the new content length.
+ *
+ * Returns     :  Pointer to the modified buffer, or
+ *                NULL if filtering failed or wasn't necessary.
+ *
+ *********************************************************************/
+char *execute_client_content_filters(struct client_state *csp, size_t *content_length)
+{
+   char *ret;
+
+   assert(client_content_filters_enabled(csp->action));
+
+   if (content_length == 0)
+   {
+      /*
+       * No content, no filtering necessary.
+       */
+      return NULL;
+   }
+
+   if (csp->multipart_form_boundary_start != NULL)
+      return filter_miltipart_form_data(csp, content_length);
+   else if (csp->content_type & CT_URLENCODED)
+      return filter_urlencoded_form_data(csp, content_length);
+   else if ((csp->content_type & CT_TEXT) == 0)
+      return NULL;
+
+   /* CT_TEXT content */
+   ret = pcrs_filter_request(csp, csp->client_iob->cur, content_length);
+   if (ret != NULL)
+   {
+      csp->client_iob->cur = csp->client_iob->eod;
+   }
+   return ret;
 }
 
 
@@ -2721,6 +3074,25 @@ int content_filters_enabled(const struct current_action_spec *action)
    return ((action->flags & ACTION_DEANIMATE) ||
       !list_is_empty(action->multi[ACTION_MULTI_FILTER]) ||
       !list_is_empty(action->multi[ACTION_MULTI_EXTERNAL_FILTER]));
+}
+
+
+/*********************************************************************
+ *
+ * Function    :  client_content_filters_enabled
+ *
+ * Description :  Checks whether there are any client content filters
+ *                enabled for the current request.
+ *
+ * Parameters  :
+ *          1  :  action = Action spec to check.
+ *
+ * Returns     :  TRUE for yes, FALSE otherwise
+ *
+ *********************************************************************/
+int client_content_filters_enabled(const struct current_action_spec *action)
+{
+   return !list_is_empty(action->multi[ACTION_MULTI_CLIENT_CONTENT_FILTER]);
 }
 
 
