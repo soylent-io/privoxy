@@ -906,3 +906,12 @@ s@^X-Privoxy-Control:\s*@@i
 SERVER-HEADER-FILTER: privoxy-control Removes X-Privoxy-Control headers.
 
 s@^X-Privoxy-Control:.*@@i
+
+#################################################################################
+#
+# empty-client-text-content: Empty client request text content
+#
+#################################################################################
+CLIENT-CONTENT-FILTER: empty-client-text-content Empty client request text content
+
+s@^.*$@@sm
