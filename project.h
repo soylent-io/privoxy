@@ -495,9 +495,10 @@ struct iob
 
 
 /* Bits for csp->content_type bitmask: */
-#define CT_TEXT    0x0001U /**< Suitable for pcrs filtering. */
-#define CT_GIF     0x0002U /**< Suitable for GIF filtering.  */
-#define CT_TABOO   0x0004U /**< DO NOT filter, irrespective of other flags. */
+#define CT_TEXT         0x0001U /**< Suitable for pcrs filtering. */
+#define CT_GIF          0x0002U /**< Suitable for GIF filtering.  */
+#define CT_TABOO        0x0004U /**< DO NOT filter, irrespective of other flags. */
+#define CT_URLENCODED   0x0008U /**< application/x-www-form-urlencoded content */
 
 /* Although these are not, strictly speaking, content types
  * (they are content encodings), it is simple to handle them
@@ -651,8 +652,10 @@ struct iob
 #define ACTION_MULTI_EXTERNAL_FILTER         6
 /** Index into current_action_spec::multi[] for tags to suppress. */
 #define ACTION_MULTI_SUPPRESS_TAG            7
+/** Index into current_action_spec::multi[] for client-content filters to apply. */
+#define ACTION_MULTI_CLIENT_CONTENT_FILTER   8
 /** Number of multi-string actions. */
-#define ACTION_MULTI_COUNT                   8
+#define ACTION_MULTI_COUNT                   9
 
 
 /**
@@ -1058,6 +1061,11 @@ struct client_state
    /** List of all headers for this request */
    struct list headers[1];
 
+   /** Pointer to multipart form boundary string start.
+    *  Simply points to parsed headers list content.
+    */
+   const char *multipart_form_boundary_start;
+
 #ifdef FEATURE_HTTPS_INSPECTION
    /** List of all encrypted headers for this request */
    struct list https_headers[1];
@@ -1302,17 +1310,18 @@ enum filter_type
    FT_SERVER_HEADER_FILTER = 2,
    FT_CLIENT_HEADER_TAGGER = 3,
    FT_SERVER_HEADER_TAGGER = 4,
+   FT_SUPPRESS_TAG = 5,
+   FT_CLIENT_CONTENT_FILTER = 6,
 #ifdef FEATURE_EXTERNAL_FILTERS
-   FT_EXTERNAL_CONTENT_FILTER = 5,
+   FT_EXTERNAL_CONTENT_FILTER = 7,
 #endif
-   FT_SUPPRESS_TAG = 6,
    FT_INVALID_FILTER       = 42,
 };
 
 #ifdef FEATURE_EXTERNAL_FILTERS
-#define MAX_FILTER_TYPES        7
+#define MAX_FILTER_TYPES        8
 #else
-#define MAX_FILTER_TYPES        6
+#define MAX_FILTER_TYPES        7
 #endif
 
 /**

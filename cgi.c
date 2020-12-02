@@ -57,6 +57,7 @@
 #include "errlog.h"
 #include "filters.h"
 #include "miscutil.h"
+#include "parsers.h"
 #include "cgisimple.h"
 #include "jbsockets.h"
 #if defined(FEATURE_CGI_EDIT_ACTIONS) || defined(FEATURE_TOGGLE)
@@ -652,68 +653,7 @@ static struct http_response *dispatch_known_cgi(struct client_state * csp,
  *********************************************************************/
 static struct map *parse_cgi_parameters(char *argstring)
 {
-   char *p;
-   char **vector;
-   int pairs, i;
-   struct map *cgi_params;
-
-   /*
-    * XXX: This estimate is guaranteed to be high enough as we
-    *      let ssplit() ignore empty fields, but also a bit wasteful.
-    *      The same hack is used in get_last_url() so it looks like
-    *      a real solution is needed.
-    */
-   size_t max_segments = strlen(argstring) / 2;
-   if (max_segments == 0)
-   {
-      /*
-       * XXX: If the argstring is empty, there's really
-       *      no point in creating a param list, but currently
-       *      other parts of Privoxy depend on the list's existence.
-       */
-      max_segments = 1;
-   }
-   vector = malloc_or_die(max_segments * sizeof(char *));
-
-   cgi_params = new_map();
-
-   /*
-    * IE 5 does, of course, violate RFC 2316 Sect 4.1 and sends
-    * the fragment identifier along with the request, so we must
-    * cut it off here, so it won't pollute the CGI params:
-    */
-   if (NULL != (p = strchr(argstring, '#')))
-   {
-      *p = '\0';
-   }
-
-   pairs = ssplit(argstring, "&", vector, max_segments);
-   assert(pairs != -1);
-   if (pairs == -1)
-   {
-      freez(vector);
-      free_map(cgi_params);
-      return NULL;
-   }
-
-   for (i = 0; i < pairs; i++)
-   {
-      if ((NULL != (p = strchr(vector[i], '='))) && (*(p+1) != '\0'))
-      {
-         *p = '\0';
-         if (map(cgi_params, url_decode(vector[i]), 0, url_decode(++p), 0))
-         {
-            freez(vector);
-            free_map(cgi_params);
-            return NULL;
-         }
-      }
-   }
-
-   freez(vector);
-
-   return cgi_params;
-
+   return parse_url_encoded_string(argstring);
 }
 
 
