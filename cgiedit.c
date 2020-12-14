@@ -205,6 +205,8 @@ struct filter_type_info
                                       first or second character capitalized */
    const char *anchor;           /**< Anchor for the User Manual link,
                                       for example "SERVER-HEADER-FILTER"  */
+   const char *string_filter_desc; /**< For string filters: action description */
+   const char *string_filter_input;/**< For string filters: input field description */
 };
 
 /* Accessed by index, keep the order in the way the FT_ macros are defined. */
@@ -214,37 +216,37 @@ static const struct filter_type_info filter_type_info[] =
       ACTION_MULTI_FILTER,
       "content-filter-params", "filter",
       "filter-all", "filter_all",
-      "F", "FILTER"
+      "F", "FILTER", "", ""
    },
    {
       ACTION_MULTI_CLIENT_HEADER_FILTER,
       "client-header-filter-params", "client-header-filter",
       "client-header-filter-all", "client_header_filter_all",
-      "C", "CLIENT-HEADER-FILTER"
+      "C", "CLIENT-HEADER-FILTER", "", ""
    },
    {
       ACTION_MULTI_SERVER_HEADER_FILTER,
       "server-header-filter-params", "server-header-filter",
       "server-header-filter-all", "server_header_filter_all",
-      "S", "SERVER-HEADER-FILTER"
+      "S", "SERVER-HEADER-FILTER", "", ""
    },
    {
       ACTION_MULTI_CLIENT_HEADER_TAGGER,
       "client-header-tagger-params", "client-header-tagger",
       "client-header-tagger-all", "client_header_tagger_all",
-      "L", "CLIENT-HEADER-TAGGER"
+      "L", "CLIENT-HEADER-TAGGER", "", ""
    },
    {
       ACTION_MULTI_SERVER_HEADER_TAGGER,
       "server-header-tagger-params", "server-header-tagger",
       "server-header-tagger-all", "server_header_tagger_all",
-      "E", "SERVER-HEADER-TAGGER"
+      "E", "SERVER-HEADER-TAGGER", "", ""
    },
    {
       ACTION_MULTI_SUPPRESS_TAG,
       "suppress-tag-params", "suppress-tag",
       "suppress-tag-all", "suppress_tag_all",
-      "U", "SUPPRESS-TAG"
+      "U", "SUPPRESS-TAG", "Suppress tag", "Tag to suppress"
    },
    {
       ACTION_MULTI_CLIENT_CONTENT_FILTER,
@@ -252,14 +254,26 @@ static const struct filter_type_info filter_type_info[] =
       "client-content-filter-all", "client_content_filter_all",
       "P", "CLIENT-CONTENT-FILTER"
    },
+   {
+      ACTION_MULTI_ADD_HEADER,
+      "add-header-params", "add-header",
+      "add-header-all", "add_header_all",
+      "H", "ADD-HEADER", "Adds HTTP header", "HTTP header to add"
+   },
 #ifdef FEATURE_EXTERNAL_FILTERS
    {
       ACTION_MULTI_EXTERNAL_FILTER,
       "external-content-filter-params", "external-filter",
       "external-content-filter-all", "external_content_filter_all",
-      "E", "EXTERNAL-CONTENT-FILTER"
+      "E", "EXTERNAL-CONTENT-FILTER", "", ""
    },
 #endif
+};
+
+/* String filter types: special CGI handling */
+static const enum filter_type STRING_FILTERS[] = {
+   FT_SUPPRESS_TAG,
+   FT_ADD_HEADER
 };
 
 /* FIXME: Following non-static functions should be prototyped in .h or made static */
@@ -319,9 +333,9 @@ static jb_err actions_to_radio(struct map * exports,
 static jb_err actions_from_radio(const struct map * parameters,
                                  struct action_spec *action);
 static jb_err action_render_string_filters_template(struct map * exports,
-                                       const struct action_spec *action,
-                                       const char* flter_template,
-                                       const struct filter_type_info *type);
+                                                    const struct action_spec *action,
+                                                    const char* flter_template,
+                                                    const struct filter_type_info *type);
 
 
 static jb_err map_copy_parameter_html(struct map *out,
@@ -2765,8 +2779,9 @@ jb_err cgi_edit_actions_for_url(struct client_state *csp,
 
    if (!err) err = actions_to_radio(exports, cur_line->data.action);
 
-   if (!err) err = action_render_string_filters_template(exports, cur_line->data.action, filter_template,
-                                               &filter_type_info[FT_SUPPRESS_TAG]);
+   for (i = 0; !err && i < SZ(STRING_FILTERS); ++i)
+      err = action_render_string_filters_template(exports, cur_line->data.action, filter_template,
+                                                  &filter_type_info[STRING_FILTERS[i]]);
    freez(filter_template);
 
    /*
@@ -3015,6 +3030,169 @@ static int get_number_of_filters(const struct client_state *csp)
 
 /*********************************************************************
  *
+ * Function    :  cgi_edit_process_string_action
+ *
+ * Description :  Helper CGI function that actually edits the Actions list for
+ *                the string filter parameters.
+ *
+ * Parameters  :
+ *          1  :  csp = Current client state (buffers, headers, etc...)
+ *          2  :  rsp = http_response data structure for output
+ *          3  :  parameters = map of cgi parameters
+ *          4  :  cur_line = current config file line
+ *          5  :  filter_type = string filter type to process
+ *
+ * Returns     :  JB_ERR_OK     on success
+ *                JB_ERR_MEMORY on out-of-memory
+ *                JB_ERR_CGI_PARAMS if the CGI parameters are not
+ *                                  specified or not valid.
+ *
+ *********************************************************************/
+static jb_err cgi_edit_process_string_action(struct client_state *csp,
+                                             struct http_response *rsp,
+                                             const struct map *parameters,
+                                             struct file_line * cur_line,
+                                             enum filter_type filter_type)
+{
+   jb_err err = JB_ERR_OK;
+   const char *abbr_type = filter_type_info[filter_type].abbr_type;
+
+   /* process existing string actions */
+   for (int filter_identifier = 0; !err; filter_identifier++)
+   {
+      char key_value[30];
+      char key_name[30];
+      char old_name[30];
+      char key_type[30];
+      const char *name, *new_name;
+      char value; /*
+                   * Filter state. Valid states are: 'Y' (active),
+                   * 'N' (inactive) and 'X' (no change).
+                   * XXX: bad name.
+                   */
+      char type;  /*
+                   * Abbreviated filter type. Valid types are: 'U' (suppress tag), 'H' (add header)
+                   */
+      int multi_action_index = 0;
+
+      /* Generate the keys */
+      snprintf(key_value, sizeof(key_value), "string_filter_%s_r%x", abbr_type, filter_identifier);
+      snprintf(key_name, sizeof(key_name), "string_filter_%s_n%x", abbr_type, filter_identifier);
+      snprintf(old_name, sizeof(old_name), "string_filter_%s_o%x", abbr_type, filter_identifier);
+      snprintf(key_type, sizeof(key_type), "string_filter_%s_t%x", abbr_type, filter_identifier);
+
+      err = get_string_param(parameters, old_name, &name);
+      if (err) break;
+
+      if (name == NULL)
+      {
+         /* The filter identifier isn't present: we're done! */
+         break;
+      }
+
+      err = get_string_param(parameters, key_name, &new_name);
+      if (err) break;
+      if (new_name == NULL) new_name = name;
+
+      type = get_char_param(parameters, key_type);
+      switch (type)
+      {
+         case 'U':
+            multi_action_index = ACTION_MULTI_SUPPRESS_TAG;
+            break;
+         case 'H':
+            multi_action_index = ACTION_MULTI_ADD_HEADER;
+            break;
+         default:
+            log_error(LOG_LEVEL_ERROR,
+               "Unknown filter type: %c for filter %s. Filter ignored.", type, name);
+            continue;
+      }
+
+      value = get_char_param(parameters, key_value);
+      if (value == 'X' || value == 'Y' || value == 'N')
+      {
+         list_remove_item(cur_line->data.action->multi_add[multi_action_index], name);
+         list_remove_item(cur_line->data.action->multi_remove[multi_action_index], name);
+      }
+
+      if (value == 'Y')
+      {
+         err = enlist(cur_line->data.action->multi_add[multi_action_index], new_name);
+      }
+      else if (value == 'N')
+      {
+         err = enlist(cur_line->data.action->multi_remove[multi_action_index], new_name);
+      }
+   }
+
+   /* process new string actions */
+   for (int filter_identifier = 0; !err; filter_identifier++)
+   {
+      char key_value[30];
+      char key_name[30];
+      char key_type[30];
+      const char *name;
+      char value; /*
+                   * Filter state. Valid states are: 'Y' (active),
+                   * 'N' (inactive) and 'X' (no change).
+                   * XXX: bad name.
+                   */
+      char type;  /*
+                   * Abbreviated filter type. Valid types are: 'U' (suppress tag), 'H' (add header)
+                   */
+      int multi_action_index = 0;
+
+      /* Generate the keys */
+      snprintf(key_value, sizeof(key_value), "new_string_filter_%s_r%x", abbr_type, filter_identifier);
+      snprintf(key_name, sizeof(key_name), "new_string_filter_%s_n%x", abbr_type, filter_identifier);
+      snprintf(key_type, sizeof(key_type), "new_string_filter_%s_t%x", abbr_type, filter_identifier);
+
+      err = get_string_param(parameters, key_name, &name);
+      if (err) break;
+
+      if (name == NULL)
+      {
+         /* The filter identifier isn't present: we've done! */
+         break;
+      }
+
+      type = get_char_param(parameters, key_type);
+      switch (type)
+      {
+         case 'U':
+            multi_action_index = ACTION_MULTI_SUPPRESS_TAG;
+            break;
+         case 'H':
+            multi_action_index = ACTION_MULTI_ADD_HEADER;
+            break;
+         default:
+            log_error(LOG_LEVEL_ERROR,
+               "Unknown filter type: %c for filter %s. Filter ignored.", type, name);
+            continue;
+      }
+
+      value = get_char_param(parameters, key_value);
+      if (value == 'Y')
+      {
+         list_remove_item(cur_line->data.action->multi_add[multi_action_index], name);
+         if (!err) err = enlist(cur_line->data.action->multi_add[multi_action_index], name);
+         list_remove_item(cur_line->data.action->multi_remove[multi_action_index], name);
+      }
+      else if (value == 'N')
+      {
+         list_remove_item(cur_line->data.action->multi_add[multi_action_index], name);
+         list_remove_item(cur_line->data.action->multi_remove[multi_action_index], name);
+         if (!err) err = enlist(cur_line->data.action->multi_remove[multi_action_index], name);
+      }
+      /* nothing to do if the value is 'X' */
+   }
+   return err;
+}
+
+
+/*********************************************************************
+ *
  * Function    :  cgi_edit_actions_submit
  *
  * Description :  CGI function that actually edits the Actions list.
@@ -3226,132 +3404,9 @@ jb_err cgi_edit_actions_submit(struct client_state *csp,
       }
    }
 
-   /* process existing suppress tag */
-   for (filter_identifier = 0; !err; filter_identifier++)
-   {
-      char key_value[30];
-      char key_name[30];
-      char old_name[30];
-      char key_type[30];
-      const char *name, *new_name;
-      char value; /*
-                   * Filter state. Valid states are: 'Y' (active),
-                   * 'N' (inactive) and 'X' (no change).
-                   * XXX: bad name.
-                   */
-      char type;  /*
-                   * Abbreviated filter type. Valid types are: 'U' (suppress tag).
-                   */
-      int multi_action_index = 0;
-
-      /* Generate the keys */
-      snprintf(key_value, sizeof(key_value), "string_filter_r%x", filter_identifier);
-      snprintf(key_name, sizeof(key_name), "string_filter_n%x", filter_identifier);
-      snprintf(old_name, sizeof(old_name), "string_filter_o%x", filter_identifier);
-      snprintf(key_type, sizeof(key_type), "string_filter_t%x", filter_identifier);
-
-      err = get_string_param(parameters, old_name, &name);
-      if (err) break;
-
-      if (name == NULL)
-      {
-         /* The filter identifier isn't present: we're done! */
-         break;
-      }
-
-      err = get_string_param(parameters, key_name, &new_name);
-      if (err) break;
-      if (new_name == NULL) new_name = name;
-
-      type = get_char_param(parameters, key_type);
-      switch (type)
-      {
-         case 'U':
-            multi_action_index = ACTION_MULTI_SUPPRESS_TAG;
-            break;
-         default:
-            log_error(LOG_LEVEL_ERROR,
-               "Unknown filter type: %c for filter %s. Filter ignored.", type, name);
-            continue;
-      }
-      assert(multi_action_index);
-
-      value = get_char_param(parameters, key_value);
-      if (value == 'X' || value == 'Y' || value == 'N')
-      {
-         list_remove_item(cur_line->data.action->multi_add[multi_action_index], name);
-         list_remove_item(cur_line->data.action->multi_remove[multi_action_index], name);
-      }
-
-      if (value == 'Y')
-      {
-         err = enlist(cur_line->data.action->multi_add[multi_action_index], new_name);
-      }
-      else if (value == 'N')
-      {
-         err = enlist(cur_line->data.action->multi_remove[multi_action_index], new_name);
-      }
-   }
-
    /* process new string filters */
-   for (filter_identifier = 0; !err; filter_identifier++)
-   {
-      char key_value[30];
-      char key_name[30];
-      char key_type[30];
-      const char *name;
-      char value; /*
-                   * Filter state. Valid states are: 'Y' (active),
-                   * 'N' (inactive) and 'X' (no change).
-                   * XXX: bad name.
-                   */
-      char type;  /*
-                   * Abbreviated filter type. Valid types are: 'U' (suppress tag).
-                   */
-      int multi_action_index = 0;
-
-      /* Generate the keys */
-      snprintf(key_value, sizeof(key_value), "new_string_filter_r%x", filter_identifier);
-      snprintf(key_name, sizeof(key_name), "new_string_filter_n%x", filter_identifier);
-      snprintf(key_type, sizeof(key_type), "new_string_filter_t%x", filter_identifier);
-
-      err = get_string_param(parameters, key_name, &name);
-      if (err) break;
-
-      if (name == NULL)
-      {
-         /* The filter identifier isn't present: we've done! */
-         break;
-      }
-
-      type = get_char_param(parameters, key_type);
-      switch (type)
-      {
-         case 'U':
-            multi_action_index = ACTION_MULTI_SUPPRESS_TAG;
-            break;
-         default:
-            log_error(LOG_LEVEL_ERROR,
-               "Unknown filter type: %c for filter %s. Filter ignored.", type, name);
-            continue;
-      }
-      assert(multi_action_index);
-
-      value = get_char_param(parameters, key_value);
-      if (value == 'Y')
-      {
-         list_remove_item(cur_line->data.action->multi_add[multi_action_index], name);
-         if (!err) err = enlist(cur_line->data.action->multi_add[multi_action_index], name);
-         list_remove_item(cur_line->data.action->multi_remove[multi_action_index], name);
-      }
-      else if (value == 'N')
-      {
-         list_remove_item(cur_line->data.action->multi_add[multi_action_index], name);
-         list_remove_item(cur_line->data.action->multi_remove[multi_action_index], name);
-         if (!err) err = enlist(cur_line->data.action->multi_remove[multi_action_index], name);
-      }
-      /* nothing to do if the value is 'X' */
-   }
+   for (i = 0; !err && i < SZ(STRING_FILTERS); ++i)
+      err = cgi_edit_process_string_action(csp, rsp, parameters, cur_line, STRING_FILTERS[i]);
 
    if (err)
    {
@@ -4468,6 +4523,8 @@ static jb_err action_render_string_filters_template(struct map * exports,
             if (!err) err = map(line_exports, "filter-type", 1, type->type, 1);
             if (!err) err = map(line_exports, "abbr-filter-type", 1, type->abbr_type, 1);
             if (!err) err = map(line_exports, "anchor", 1, type->anchor, 1);
+            if (!err) err = map(line_exports, "desc", 1, type->string_filter_desc, 1);
+            if (!err) err = map(line_exports, "input_desc", 1, type->string_filter_input, 1);
             if (!err)
             {
                filter_line = strdup(filter_template);
