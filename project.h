@@ -485,6 +485,9 @@ struct pattern_spec
 /** Pattern spec bitmap: It's a CLIENT-TAG pattern. */
 #define PATTERN_SPEC_CLIENT_TAG_PATTERN      0x00000010UL
 
+/** Pattern spec bitmap: It's a CLIENT-INPUT-NAME pattern. */
+#define PATTERN_SPEC_CLIENT_INPUT_NAME_PATTERN 0x00000020UL
+
 /**
  * An I/O buffer.  Holds a string which can be appended to, and can have data
  * removed from the beginning.

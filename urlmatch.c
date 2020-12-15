@@ -1208,7 +1208,8 @@ jb_err create_pattern_spec(struct pattern_spec *pattern, char *buf)
       { "CLIENT-TAG:",      11, PATTERN_SPEC_CLIENT_TAG_PATTERN},
  #endif
       { "NO-REQUEST-TAG:",  15, PATTERN_SPEC_NO_REQUEST_TAG_PATTERN},
-      { "NO-RESPONSE-TAG:", 16, PATTERN_SPEC_NO_RESPONSE_TAG_PATTERN}
+      { "NO-RESPONSE-TAG:", 16, PATTERN_SPEC_NO_RESPONSE_TAG_PATTERN},
+      { "CLIENT-INPUT-NAME:", 18, PATTERN_SPEC_CLIENT_INPUT_NAME_PATTERN}
    };
    int i;
 

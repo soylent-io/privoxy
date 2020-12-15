@@ -80,6 +80,11 @@ static void apply_url_actions(struct current_action_spec *action,
                               const struct list *client_tags,
 #endif
                               struct url_actions *b);
+static void apply_client_input_actions(struct current_action_spec *action,
+                                       const char *input_name,
+                                       struct url_actions *b);
+void get_client_input_actions(struct current_action_spec *action, const struct client_state *csp,
+                              const char* input_name);
 
 #ifdef FEATURE_EXTENDED_STATISTICS
 static void increment_block_reason_counter(const char *block_reason);
@@ -1554,13 +1559,14 @@ struct re_filterfile_spec *get_filter(const struct client_state *csp,
  *                or NULL if there were no hits or something went wrong
  *
  *********************************************************************/
-static char *pcrs_filter_impl(struct client_state *csp, int filter_response_body,
+static char *pcrs_filter_impl(struct client_state *csp, const struct list_entry *actions,
+                              int filter_response_body,
                               const char *data, size_t *data_len)
 {
    int hits = 0;
    size_t size, prev_size;
-   const int filters_idx =
-      filter_response_body ? ACTION_MULTI_FILTER : ACTION_MULTI_CLIENT_CONTENT_FILTER;
+/*   const int filters_idx =
+      filter_response_body ? ACTION_MULTI_FILTER : ACTION_MULTI_CLIENT_CONTENT_FILTER; */
    const enum filter_type filter_type =
       filter_response_body ? FT_CONTENT_FILTER : FT_CLIENT_CONTENT_FILTER;
 
@@ -1569,7 +1575,7 @@ static char *pcrs_filter_impl(struct client_state *csp, int filter_response_body
    pcrs_job *job;
 
    struct re_filterfile_spec *b;
-   struct list_entry *filtername;
+   const struct list_entry *filtername;
 
    /*
     * Sanity first
@@ -1594,7 +1600,7 @@ static char *pcrs_filter_impl(struct client_state *csp, int filter_response_body
     * name exists and if yes, execute it's pcrs_joblist on the
     * buffer.
     */
-   for (filtername = csp->action->multi[filters_idx]->first;
+   for (filtername = actions;
         filtername != NULL; filtername = filtername->next)
    {
       int current_hits = 0; /* Number of hits caused by this filter */
@@ -1731,7 +1737,7 @@ static char *pcrs_filter_response_body(struct client_state *csp)
       return(NULL);
    }
 
-   new = pcrs_filter_impl(csp, TRUE, csp->iob->cur, &size);
+   new = pcrs_filter_impl(csp, csp->action->multi[ACTION_MULTI_FILTER]->first, TRUE, csp->iob->cur, &size);
 
    if (new != NULL)
    {
@@ -1987,9 +1993,11 @@ static char *execute_external_filter(const struct client_state *csp,
  *                or NULL if there were no hits or something went wrong
  *
  *********************************************************************/
-static char *pcrs_filter_request_body(struct client_state *csp, const char *data, size_t *data_len)
+static char *pcrs_filter_request_body(struct client_state *csp, const struct current_action_spec *actions,
+                                      const char *data, size_t *data_len)
 {
-   return pcrs_filter_impl(csp, FALSE, data, data_len);
+   return pcrs_filter_impl(csp, actions->multi[ACTION_MULTI_CLIENT_CONTENT_FILTER]->first,
+      FALSE, data, data_len);
 }
 
 
@@ -2393,7 +2401,8 @@ char *execute_content_filters(struct client_state *csp)
  *                0 otherwise
  *
  *********************************************************************/
-static int multipart_content_type_text(const char *headers_start, const char *headers_end)
+static int multipart_content_type_text(const char *headers_start, const char *headers_end,
+                                       const char **input_name, int* input_name_len)
 {
    static const char content_type[] = "Content-Type:";
 
@@ -2460,6 +2469,7 @@ static char *filter_urlencoded_form_data(struct client_state *csp, size_t *conte
    {
       size_t value_len = strlen(cur_entry->value);
       char *filtered;
+      struct current_action_spec actions = {0};
 
       tmp = url_encode(cur_entry->name);
       if (add_to_iob(&dest, csp->config->buffer_limit, tmp, (long)strlen(tmp)))
@@ -2471,7 +2481,8 @@ static char *filter_urlencoded_form_data(struct client_state *csp, size_t *conte
       {
          goto error;
       }
-      filtered = pcrs_filter_request_body(csp, cur_entry->value, &value_len);
+      get_client_input_actions(&actions, csp, cur_entry->name);
+      filtered = pcrs_filter_request_body(csp, &actions, cur_entry->value, &value_len);
       if (filtered == NULL)
       {
          tmp = url_encode(cur_entry->value);
@@ -2546,6 +2557,7 @@ static char *filter_miltipart_form_data(struct client_state *csp, size_t *conten
    const char *old_pos = csp->client_iob->cur;
    const char *pos;
    struct iob dest = {0};
+   char *input_name = NULL;
 
    char bound[bound_len + 5];
 
@@ -2579,9 +2591,12 @@ static char *filter_miltipart_form_data(struct client_state *csp, size_t *conten
    {
       const char *filtered_data;
       const char *data_start;
+      const char *input_name_ptr;
+      int input_name_len;
       size_t data_len;
       int content_type_text;
       jb_err error;
+      struct current_action_spec actions = {0};
 
       data_start = strstr(pos, "\r\n\r\n");
       if (data_start == NULL)
@@ -2590,7 +2605,11 @@ static char *filter_miltipart_form_data(struct client_state *csp, size_t *conten
          goto error;
       }
       data_start += 4;
-      content_type_text = multipart_content_type_text(pos, data_start);
+      content_type_text = multipart_content_type_text(pos, data_start, &input_name_ptr, &input_name_len);
+      // TODO : no input len
+      input_name = malloc_or_die(input_name_len + 1);
+      strncpy(input_name, input_name_ptr, input_name_len);
+      input_name[input_name_len] = 0;
       pos = strstr(data_start, bound);
       if (pos == NULL)
       {
@@ -2612,7 +2631,8 @@ static char *filter_miltipart_form_data(struct client_state *csp, size_t *conten
       }
       old_pos = pos;
       data_len = (size_t)(pos - data_start);
-      filtered_data = pcrs_filter_request_body(csp, data_start, &data_len);
+      get_client_input_actions(&actions, csp, input_name);
+      filtered_data = pcrs_filter_request_body(csp, &actions, data_start, &data_len);
       if (filtered_data == NULL)
       {
          if (add_to_iob(&dest, csp->config->buffer_limit, data_start, pos - data_start))
@@ -2623,6 +2643,7 @@ static char *filter_miltipart_form_data(struct client_state *csp, size_t *conten
       }
       error = add_to_iob(&dest, csp->config->buffer_limit, filtered_data, (long)data_len);
       freez(filtered_data);
+      freez(input_name);
       if (error)
       {
          goto error;
@@ -2646,6 +2667,7 @@ static char *filter_miltipart_form_data(struct client_state *csp, size_t *conten
 
 error:
    freez(dest.cur);
+   freez(input_name);
    return NULL;
 }
 
@@ -2695,7 +2717,7 @@ char *execute_client_content_filters(struct client_state *csp, size_t *content_l
    }
 
    /* CT_TEXT content */
-   ret = pcrs_filter_request_body(csp, csp->client_iob->cur, content_length);
+   ret = pcrs_filter_request_body(csp, csp->action, csp->client_iob->cur, content_length);
    if (ret != NULL)
    {
       csp->client_iob->cur = csp->client_iob->eod;
@@ -2741,6 +2763,107 @@ void get_url_actions(struct client_state *csp, struct http_request *http)
 
    return;
 }
+
+
+/*********************************************************************
+ *
+ * Function    :  get_client_input_actions
+ *
+ * Description :  Gets the actions for this URL.
+ *
+ * Parameters  :
+ *          1  :  csp = Current client state (buffers, headers, etc...)
+ *          2  :  http = http_request request for blocked URLs
+ *
+ * Returns     :  N/A
+ *
+ *********************************************************************/
+void get_client_input_actions(struct current_action_spec *action, const struct client_state *csp,
+                              const char* input_name)
+{
+   struct file_list *fl;
+   struct url_actions *b;
+   int i;
+
+   init_current_action(action);
+
+   for (i = 0; i < MAX_AF_FILES; i++)
+   {
+      if (((fl = csp->actions_list[i]) == NULL) || ((b = fl->f) == NULL))
+      {
+         return;
+      }
+
+      apply_client_input_actions(action, input_name, b);
+   }
+
+   return;
+}
+
+
+/*********************************************************************
+ *
+ * Function    :  client_tag_match
+ *
+ * Description :  Compare a client tag against a client tag pattern.
+ *
+ * Parameters  :
+ *          1  :  pattern = a TAG pattern
+ *          2  :  tag = Client tag to match
+ *
+ * Returns     :  Nonzero if the tag matches the pattern, else 0.
+ *
+ *********************************************************************/
+static int input_name_match(const struct pattern_spec *pattern,
+                            const char *input_name)
+{
+   if (!(pattern->flags & PATTERN_SPEC_CLIENT_INPUT_NAME_PATTERN))
+   {
+      /*
+       * It's not a client input pattern: by default match all inputs
+       */
+      return 1;
+   }
+
+   assert(input_name);
+
+   return 0 == regexec(pattern->pattern.tag_regex, input_name, 0, NULL, 0);
+}
+
+
+/*********************************************************************
+ *
+ * Function    :  apply_client_input_actions
+ *
+ * Description :  Applies a list of URL actions.
+ *
+ * Parameters  :
+ *          1  :  action = Destination.
+ *          2  :  http = Current URL
+ *          4  :  b = list of URL actions to apply
+ *
+ * Returns     :  N/A
+ *
+ *********************************************************************/
+static void apply_client_input_actions(struct current_action_spec *action,
+                                       const char *input_name,
+                                       struct url_actions *b)
+{
+   if (b == NULL)
+   {
+      /* Should never happen */
+      return;
+   }
+
+   for (b = b->next; NULL != b; b = b->next)
+   {
+      if (input_name_match(b->url, input_name))
+      {
+         merge_current_action(action, b->action);
+      }
+   }
+}
+
 
 /*********************************************************************
  *
