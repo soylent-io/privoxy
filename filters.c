@@ -2820,9 +2820,9 @@ static int input_name_match(const struct pattern_spec *pattern,
    if (!(pattern->flags & PATTERN_SPEC_CLIENT_INPUT_NAME_PATTERN))
    {
       /*
-       * It's not a client input pattern: by default match all inputs
+       * It's not a client input pattern
        */
-      return 1;
+      return 0;
    }
 
    assert(input_name);
