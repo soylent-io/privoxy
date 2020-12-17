@@ -1991,6 +1991,111 @@ static jb_err parse_client_request(struct client_state *csp)
 
 /*********************************************************************
  *
+ * Function    : read_http_post_data
+ *
+ * Description : Reads remaining POST data from the client
+ *
+ * Parameters  :
+ *          1  :  csp = Current client state (buffers, headers, etc...)
+ *
+ * Returns     :  0 on success, anything else is an error.
+ *
+ *********************************************************************/
+static int read_http_post_data(struct client_state *csp)
+{
+   size_t to_read = csp->expected_client_content_length;
+   int len;
+
+   assert(to_read != 0);
+
+   /* check if all data has been already read */
+   if (to_read <= (csp->client_iob->eod - csp->client_iob->cur))
+   {
+      return 0;
+   }
+
+   for (to_read -= (size_t)(csp->client_iob->eod - csp->client_iob->cur);
+        to_read > 0 && data_is_available(csp->cfd, csp->config->socket_timeout);
+        to_read -= (unsigned)len)
+   {
+      char buf[BUFFER_SIZE];
+      size_t max_bytes_to_read = to_read < sizeof(buf) ? to_read : sizeof(buf);
+
+      log_error(LOG_LEVEL_CONNECT,
+         "Waiting for up to %d bytes of POST data from the client.",
+         max_bytes_to_read);
+      len = read_socket(csp->cfd, buf, (int)max_bytes_to_read);
+      if (len <= -1)
+      {
+         log_error(LOG_LEVEL_CONNECT, "Failed receiving request body from %s", csp->ip_addr_str);
+         return 1;
+      }
+      if (add_to_iob(csp->client_iob, csp->config->buffer_limit, (char *)buf, len))
+      {
+         return 1;
+      }
+      assert(to_read >= len);
+   }
+
+   if (to_read != 0)
+   {
+      log_error(LOG_LEVEL_CONNECT, "Not enough post data has been read: expected %d more bytes",
+         csp->expected_client_content_length);
+      return 1;
+   }
+   log_error(LOG_LEVEL_CONNECT, "The last %d bytes of the post data has been read",
+      csp->expected_client_content_length);
+   return 0;
+}
+
+
+/*********************************************************************
+ *
+ * Function    : update_client_headers
+ *
+ * Description : Updates the HTTP headers from the client request
+ *
+ * Parameters  :
+ *          1  :  csp = Current client state (buffers, headers, etc...)
+ *
+ * Returns     :  0 on success, anything else is an error.
+ *
+ *********************************************************************/
+static int update_client_headers(struct client_state *csp, size_t new_content_length)
+{
+   static const char content_length[] = "Content-Length:";
+   int updated = 0;
+
+#ifndef FEATURE_HTTPS_INSPECTION
+   for (struct list_entry *p = csp->headers->first;
+#else
+   for (struct list_entry *p = csp->http->client_ssl ? csp->https_headers->first : csp->headers->first;
+#endif
+        !updated  && (p != NULL); p = p->next)
+   {
+      /* Header crunch()ed in previous run? -> ignore */
+      if (p->str == NULL)
+      {
+         continue;
+      }
+
+      /* Does the current parser handle this header? */
+      if (0 == strncmpic(p->str, content_length, sizeof(content_length) - 1))
+      {
+         updated = (JB_ERR_OK == header_adjust_content_length((char **)&(p->str), new_content_length));
+         if (!updated)
+         {
+            return 1;
+         }
+      }
+   }
+
+   return !updated;
+}
+
+
+/*********************************************************************
+ *
  * Function    : send_http_request
  *
  * Description : Sends the HTTP headers from the client request
@@ -2006,6 +2111,32 @@ static int send_http_request(struct client_state *csp)
 {
    char *hdr;
    int write_failure;
+   const char *to_send;
+   size_t to_send_len;
+   int filter_client_body = csp->expected_client_content_length != 0 &&
+      client_body_filters_enabled(csp->action);
+
+   if (filter_client_body)
+   {
+      if (read_http_post_data(csp))
+      {
+         return 1;
+      }
+      to_send_len = csp->expected_client_content_length;
+      to_send = execute_client_body_filters(csp, &to_send_len);
+      if (to_send == NULL)
+      {
+         /* just flush client_iob */
+         filter_client_body = FALSE;
+      }
+      else if (to_send_len != csp->expected_client_content_length &&
+         update_client_headers(csp, to_send_len))
+      {
+         log_error(LOG_LEVEL_HEADER, "Error updating client headers");
+         return 1;
+      }
+      csp->expected_client_content_length = 0;
+   }
 
    hdr = list_to_text(csp->headers);
    if (hdr == NULL)
@@ -2026,21 +2157,94 @@ static int send_http_request(struct client_state *csp)
    {
       log_error(LOG_LEVEL_CONNECT, "Failed sending request headers to: %s: %E",
          csp->http->hostport);
+      return 1;
    }
-   else if (((csp->flags & CSP_FLAG_PIPELINED_REQUEST_WAITING) == 0)
+
+   if (filter_client_body)
+   {
+      write_failure = 0 != write_socket(csp->server_connection.sfd, to_send, to_send_len);
+      freez(to_send);
+      if (write_failure)
+      {
+         log_error(LOG_LEVEL_CONNECT, "Failed sending filtered request body to: %s: %E",
+            csp->http->hostport);
+         return 1;
+      }
+   }
+
+   if (((csp->flags & CSP_FLAG_PIPELINED_REQUEST_WAITING) == 0)
       && (flush_iob(csp->server_connection.sfd, csp->client_iob, 0) < 0))
    {
-      write_failure = 1;
       log_error(LOG_LEVEL_CONNECT, "Failed sending request body to: %s: %E",
          csp->http->hostport);
+      return 1;
    }
-
-   return write_failure;
-
+   return 0;
 }
 
 
 #ifdef FEATURE_HTTPS_INSPECTION
+/*********************************************************************
+ *
+ * Function    : read_https_post_data
+ *
+ * Description : Reads remaining POST data from the client
+ *
+ * Parameters  :
+ *          1  :  csp = Current client state (buffers, headers, etc...)
+ *
+ * Returns     :  0 on success, anything else is an error.
+ *
+ *********************************************************************/
+static int read_https_post_data(struct client_state *csp)
+{
+   size_t to_read = csp->expected_client_content_length;
+   int len;
+
+   assert(to_read != 0);
+
+   /* check if all data has been already read */
+   if (to_read <= (csp->client_iob->eod - csp->client_iob->cur))
+   {
+      return 0;
+   }
+
+   for (to_read -= (size_t)(csp->client_iob->eod - csp->client_iob->cur);
+        to_read > 0 || is_ssl_pending(&(csp->ssl_client_attr));
+        to_read -= (unsigned)len)
+   {
+      unsigned char buf[BUFFER_SIZE];
+      size_t max_bytes_to_read = to_read < sizeof(buf) ? to_read : sizeof(buf);
+
+      log_error(LOG_LEVEL_CONNECT,
+         "Waiting for up to %d bytes of POST data from the client.",
+         max_bytes_to_read);
+      len = ssl_recv_data(&(csp->ssl_client_attr), buf,
+         (unsigned)max_bytes_to_read);
+      if (len <= 0)
+      {
+         log_error(LOG_LEVEL_CONNECT, "Failed receiving request body from %s", csp->ip_addr_str);
+         return 1;
+      }
+      if (add_to_iob(csp->client_iob, csp->config->buffer_limit, (char *)buf, len))
+      {
+         return 1;
+      }
+      assert(to_read >= len);
+   }
+
+   if (to_read != 0)
+   {
+      log_error(LOG_LEVEL_CONNECT, "Not enough post data has been read: expected %d more bytes", to_read);
+      return 1;
+   }
+
+   log_error(LOG_LEVEL_CONNECT, "The last %d bytes of the post data has been read",
+      csp->expected_client_content_length);
+   return 0;
+}
+
+
 /*********************************************************************
  *
  * Function    : receive_and_send_encrypted_post_data
@@ -2129,6 +2333,32 @@ static int send_https_request(struct client_state *csp)
    char *hdr;
    int ret;
    long flushed = 0;
+   const char *to_send;
+   size_t to_send_len;
+   int filter_client_body = csp->expected_client_content_length != 0 &&
+      client_body_filters_enabled(csp->action);
+
+   if (filter_client_body)
+   {
+      if (read_https_post_data(csp))
+      {
+         return 1;
+      }
+      to_send_len = csp->expected_client_content_length;
+      to_send = execute_client_body_filters(csp, &to_send_len);
+      if (to_send == NULL)
+      {
+         /* just flush client_iob */
+         filter_client_body = FALSE;
+      }
+      else if (to_send_len != csp->expected_client_content_length &&
+         update_client_headers(csp, to_send_len))
+      {
+         log_error(LOG_LEVEL_HEADER, "Error updating client headers");
+         return 1;
+      }
+      csp->expected_client_content_length = 0;
+   }
 
    hdr = list_to_text(csp->https_headers);
    if (hdr == NULL)
@@ -2153,6 +2383,18 @@ static int send_https_request(struct client_state *csp)
          csp->http->hostport);
       mark_server_socket_tainted(csp);
       return 1;
+   }
+
+   if (filter_client_body)
+   {
+      ret = ssl_send_data(&(csp->ssl_server_attr), (const unsigned char *)to_send, to_send_len);
+      freez(to_send);
+      if (ret < 0)
+      {
+         log_error(LOG_LEVEL_CONNECT, "Failed sending filtered request body to: %s: %E",
+            csp->http->hostport);
+         return 1;
+      }
    }
 
    if (((csp->flags & CSP_FLAG_PIPELINED_REQUEST_WAITING) == 0)
