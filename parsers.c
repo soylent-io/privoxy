@@ -293,6 +293,27 @@ long flush_iob(jb_socket fd, struct iob *iob, unsigned int delay)
 
 /*********************************************************************
  *
+ * Function    :  can_add_to_iob
+ *
+ * Description :  Checks if the given number of bytes can be added to the given iob,
+ *                expanding the buffer if necessary.
+ *
+ * Parameters  :
+ *          1  :  iob = Destination buffer.
+ *          2  :  buffer_limit = Limit to which the destination may grow
+ *          4  :  n = number of bytes to be added
+ *
+ * Returns     :  TRUE if the given iob can handle given number of bytes
+ *                FALSE buffer limit will be exceeded
+ *
+ *********************************************************************/
+int can_add_to_iob(struct iob *iob, const size_t buffer_limit, size_t n)
+{
+   return ((size_t)(iob->eod - iob->buf) + n + 1) > buffer_limit ? FALSE : TRUE;
+}
+
+/*********************************************************************
+ *
  * Function    :  add_to_iob
  *
  * Description :  Add content to the buffer, expanding the

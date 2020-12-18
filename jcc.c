@@ -2096,6 +2096,35 @@ static int update_client_headers(struct client_state *csp, size_t new_content_le
 
 /*********************************************************************
  *
+ * Function    : can_filter_request_body
+ *
+ * Description : Checks if the current request body can be stored in
+ *               the client_iob without hitting buffer limit
+ *
+ * Parameters  :
+ *          1  : csp = Current client state (buffers, headers, etc...)
+ *
+ * Returns     : TRUE if the current request size do not exceed buffer limit
+ *               FALSE otherwise
+ *
+ *********************************************************************/
+static int can_filter_request_body(struct client_state *csp)
+{
+   if (!can_add_to_iob(csp->client_iob, csp->config->buffer_limit,
+                       csp->expected_client_content_length))
+   {
+      log_error(LOG_LEVEL_INFO,
+         "Not filtering request body from %s: buffer limit %d will be exceeded "
+         "(content length %d)", csp->ip_addr_str, csp->config->buffer_limit,
+         csp->expected_client_content_length);
+      return FALSE;
+   }
+   return TRUE;
+}
+
+
+/*********************************************************************
+ *
  * Function    : send_http_request
  *
  * Description : Sends the HTTP headers from the client request
@@ -2114,7 +2143,7 @@ static int send_http_request(struct client_state *csp)
    const char *to_send;
    size_t to_send_len;
    int filter_client_body = csp->expected_client_content_length != 0 &&
-      client_body_filters_enabled(csp->action);
+      client_body_filters_enabled(csp->action) && can_filter_request_body(csp);
 
    if (filter_client_body)
    {
@@ -2314,7 +2343,6 @@ static int receive_and_send_encrypted_post_data(struct client_state *csp)
 
 }
 
-
 /*********************************************************************
  *
  * Function    : send_https_request
@@ -2336,7 +2364,7 @@ static int send_https_request(struct client_state *csp)
    const char *to_send;
    size_t to_send_len;
    int filter_client_body = csp->expected_client_content_length != 0 &&
-      client_body_filters_enabled(csp->action);
+      client_body_filters_enabled(csp->action) && can_filter_request_body(csp);
 
    if (filter_client_body)
    {

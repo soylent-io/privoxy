@@ -50,6 +50,7 @@
 #define FILTER_SERVER_HEADERS 1
 
 extern long flush_iob(jb_socket fd, struct iob *iob, unsigned int delay);
+int can_add_to_iob(struct iob *iob, const size_t buffer_limit, size_t n);
 extern jb_err add_to_iob(struct iob *iob, const size_t buffer_limit, const char *src, long n);
 extern void clear_iob(struct iob *iob);
 extern jb_err decompress_iob(struct client_state *csp);
