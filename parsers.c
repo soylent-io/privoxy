@@ -2024,7 +2024,7 @@ static jb_err get_content_length(const char *header_value, unsigned long long *l
  *
  * Parameters  :
  *          1  :  csp = Current client state (buffers, headers, etc...)
- *          2  :  header = pointer to the content-length header
+ *          2  :  header = pointer to the Content-Length header
  *
  * Returns     :  JB_ERR_OK on success, or
  *                JB_ERR_MEMORY on out-of-memory error.
@@ -2639,7 +2639,7 @@ static jb_err server_adjust_content_encoding(struct client_state *csp, char **he
  *
  * Function    :  header_adjust_content_length
  *
- * Description :  Replace given header with new Content-Length header
+ * Description :  Replace given header with new Content-Length header.
  *
  * Parameters  :
  *          1  :  header = On input, pointer to header to modify.

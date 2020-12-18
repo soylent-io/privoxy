@@ -1569,11 +1569,11 @@ struct re_filterfile_spec *get_filter(const struct client_state *csp,
  *
  * Description :  Execute all text substitutions from all applying
  *                (based on filter_response_body value) +filter
- *                or +client_body_filter actions on the given buffer
+ *                or +client_body_filter actions on the given buffer.
  *
  * Parameters  :
  *          1  :  csp = Current client state (buffers, headers, etc...)
- *          2  :  data = filter_response_body when TRUE execute +filter
+ *          2  :  filter_response_body = when TRUE execute +filter
  *                actions; execute +client_body_filter actions otherwise
  *          3  :  data = Target data
  *          4  :  data_len = Target data len
@@ -2004,7 +2004,7 @@ static char *execute_external_filter(const struct client_state *csp,
  * Function    :  pcrs_filter_request_body
  *
  * Description :  Execute all text substitutions from all applying
- *                +client_body_filter actions on the given text buffer
+ *                +client_body_filter actions on the given text buffer.
  *
  * Parameters  :
  *          1  :  csp = Current client state (buffers, headers, etc...)
@@ -2411,9 +2411,9 @@ char *execute_content_filters(struct client_state *csp)
  *
  * Function    :  execute_client_body_filters
  *
- * Description :  Executes a given client body filter.
+ * Description :  Executes a client request body filters.
  *                Upon success moves client_iob cur pointer to the end of
- *                the form data.
+ *                the processed data.
  *
  * Parameters  :
  *          1  :  csp = Current client state (buffers, headers, etc...)

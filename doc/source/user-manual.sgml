@@ -2973,7 +2973,7 @@ example.org/blocked-example-page</screen>
   <term>Effect:</term>
   <listitem>
    <para>
-    The request body to which this action applies are filtered on-the-fly through
+    All request bodies to which this action applies are filtered on-the-fly through
     the specified regular expression based substitutions.
    </para>
   </listitem>
@@ -3013,8 +3013,8 @@ example.org/blocked-example-page</screen>
   <term>Example usage (section):</term>
   <listitem>
      <screen>
-# Remove the first byte from the request body
-{+client-body-filter{remove-first-byte}}
+# Remove "test" everywhere in the request body
+{+client-body-filter{remove-test}}
 /
 </screen>
   </listitem>

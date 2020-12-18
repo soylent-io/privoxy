@@ -1991,9 +1991,9 @@ static jb_err parse_client_request(struct client_state *csp)
 
 /*********************************************************************
  *
- * Function    : read_http_post_data
+ * Function    : read_http_request_body
  *
- * Description : Reads remaining POST data from the client
+ * Description : Reads remaining request body from the client.
  *
  * Parameters  :
  *          1  :  csp = Current client state (buffers, headers, etc...)
@@ -2001,7 +2001,7 @@ static jb_err parse_client_request(struct client_state *csp)
  * Returns     :  0 on success, anything else is an error.
  *
  *********************************************************************/
-static int read_http_post_data(struct client_state *csp)
+static int read_http_request_body(struct client_state *csp)
 {
    size_t to_read = csp->expected_client_content_length;
    int len;
@@ -2022,7 +2022,7 @@ static int read_http_post_data(struct client_state *csp)
       size_t max_bytes_to_read = to_read < sizeof(buf) ? to_read : sizeof(buf);
 
       log_error(LOG_LEVEL_CONNECT,
-         "Waiting for up to %d bytes of POST data from the client.",
+         "Waiting for up to %d bytes of request body from the client.",
          max_bytes_to_read);
       len = read_socket(csp->cfd, buf, (int)max_bytes_to_read);
       if (len <= -1)
@@ -2043,7 +2043,7 @@ static int read_http_post_data(struct client_state *csp)
          csp->expected_client_content_length);
       return 1;
    }
-   log_error(LOG_LEVEL_CONNECT, "The last %d bytes of the post data has been read",
+   log_error(LOG_LEVEL_CONNECT, "The last %d bytes of the request body has been read",
       csp->expected_client_content_length);
    return 0;
 }
@@ -2053,7 +2053,7 @@ static int read_http_post_data(struct client_state *csp)
  *
  * Function    : update_client_headers
  *
- * Description : Updates the HTTP headers from the client request
+ * Description : Updates the HTTP headers from the client request.
  *
  * Parameters  :
  *          1  :  csp = Current client state (buffers, headers, etc...)
@@ -2099,13 +2099,13 @@ static int update_client_headers(struct client_state *csp, size_t new_content_le
  * Function    : can_filter_request_body
  *
  * Description : Checks if the current request body can be stored in
- *               the client_iob without hitting buffer limit
+ *               the client_iob without hitting buffer limit.
  *
  * Parameters  :
  *          1  : csp = Current client state (buffers, headers, etc...)
  *
  * Returns     : TRUE if the current request size do not exceed buffer limit
- *               FALSE otherwise
+ *               FALSE otherwise.
  *
  *********************************************************************/
 static int can_filter_request_body(struct client_state *csp)
@@ -2147,7 +2147,7 @@ static int send_http_request(struct client_state *csp)
 
    if (filter_client_body)
    {
-      if (read_http_post_data(csp))
+      if (read_http_request_body(csp))
       {
          return 1;
       }
@@ -2215,9 +2215,9 @@ static int send_http_request(struct client_state *csp)
 #ifdef FEATURE_HTTPS_INSPECTION
 /*********************************************************************
  *
- * Function    : read_https_post_data
+ * Function    : read_https_request_body
  *
- * Description : Reads remaining POST data from the client
+ * Description : Reads remaining request body from the client.
  *
  * Parameters  :
  *          1  :  csp = Current client state (buffers, headers, etc...)
@@ -2225,7 +2225,7 @@ static int send_http_request(struct client_state *csp)
  * Returns     :  0 on success, anything else is an error.
  *
  *********************************************************************/
-static int read_https_post_data(struct client_state *csp)
+static int read_https_request_body(struct client_state *csp)
 {
    size_t to_read = csp->expected_client_content_length;
    int len;
@@ -2246,7 +2246,7 @@ static int read_https_post_data(struct client_state *csp)
       size_t max_bytes_to_read = to_read < sizeof(buf) ? to_read : sizeof(buf);
 
       log_error(LOG_LEVEL_CONNECT,
-         "Waiting for up to %d bytes of POST data from the client.",
+         "Waiting for up to %d bytes of request body from the client.",
          max_bytes_to_read);
       len = ssl_recv_data(&(csp->ssl_client_attr), buf,
          (unsigned)max_bytes_to_read);
@@ -2278,7 +2278,7 @@ static int read_https_post_data(struct client_state *csp)
  *
  * Function    : receive_and_send_encrypted_post_data
  *
- * Description : Reads remaining POST data from the client and sends
+ * Description : Reads remaining request body from the client and sends
  *               it to the server.
  *
  * Parameters  :
@@ -2303,7 +2303,7 @@ static int receive_and_send_encrypted_post_data(struct client_state *csp)
          max_bytes_to_read = (int)csp->expected_client_content_length;
       }
       log_error(LOG_LEVEL_CONNECT,
-         "Waiting for up to %d bytes of POST data from the client.",
+         "Waiting for up to %d bytes of request body from the client.",
          max_bytes_to_read);
       len = ssl_recv_data(&(csp->ssl_client_attr), buf,
          (unsigned)max_bytes_to_read);
@@ -2316,7 +2316,7 @@ static int receive_and_send_encrypted_post_data(struct client_state *csp)
          /* XXX: Does this actually happen? */
          break;
       }
-      log_error(LOG_LEVEL_CONNECT, "Forwarding %d bytes of encrypted POST data",
+      log_error(LOG_LEVEL_CONNECT, "Forwarding %d bytes of encrypted request body",
          len);
       len = ssl_send_data(&(csp->ssl_server_attr), buf, (size_t)len);
       if (len == -1)
@@ -2337,7 +2337,7 @@ static int receive_and_send_encrypted_post_data(struct client_state *csp)
       }
    }
 
-   log_error(LOG_LEVEL_CONNECT, "Done forwarding encrypted POST data");
+   log_error(LOG_LEVEL_CONNECT, "Done forwarding encrypted request body");
 
    return 0;
 
@@ -2368,7 +2368,7 @@ static int send_https_request(struct client_state *csp)
 
    if (filter_client_body)
    {
-      if (read_https_post_data(csp))
+      if (read_https_request_body(csp))
       {
          return 1;
       }
@@ -2419,7 +2419,7 @@ static int send_https_request(struct client_state *csp)
       freez(to_send);
       if (ret < 0)
       {
-         log_error(LOG_LEVEL_CONNECT, "Failed sending filtered request body to: %s: %E",
+         log_error(LOG_LEVEL_CONNECT, "Failed sending filtered request body to: %s",
             csp->http->hostport);
          return 1;
       }
