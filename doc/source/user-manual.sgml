@@ -3005,7 +3005,13 @@ example.org/blocked-example-page</screen>
     to learn which client-body filters are available by default, and how to
     create your own.
    </para>
-
+   <para>
+    The amount of data that can be filtered is limited to the
+    <literal><link linkend="buffer-limit">buffer-limit</link></literal>
+    option in the main <link linkend="config">config file</link>. The
+    default is 4096 KB (4 Megs). Once this limit is exceeded, the whole
+    request body is passed through unfiltered.
+   </para>
   </listitem>
  </varlistentry>
 
