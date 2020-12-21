@@ -1585,7 +1585,7 @@ struct re_filterfile_spec *get_filter(const struct client_state *csp,
  *                or NULL if there were no hits or something went wrong
  *
  *********************************************************************/
-static char *pcrs_filter_impl(struct client_state *csp, int filter_response_body,
+static char *pcrs_filter_impl(const struct client_state *csp, int filter_response_body,
                               const char *data, size_t *data_len)
 {
    int hits = 0;
@@ -2018,7 +2018,7 @@ static char *execute_external_filter(const struct client_state *csp,
  *                or NULL if there were no hits or something went wrong
  *
  *********************************************************************/
-static char *pcrs_filter_request_body(struct client_state *csp, const char *data, size_t *data_len)
+static char *pcrs_filter_request_body(const struct client_state *csp, const char *data, size_t *data_len)
 {
    return pcrs_filter_impl(csp, FALSE, data, data_len);
 }
@@ -2414,9 +2414,9 @@ char *execute_content_filters(struct client_state *csp)
  *
  * Function    :  execute_client_body_filters
  *
- * Description :  Executes a client request body filters.
- *                Upon success moves client_iob cur pointer to the end of
- *                the processed data.
+ * Description :  Executes client body filters for the request that is buffered
+ *                in the client_iob. Upon success moves client_iob cur pointer
+ *                to the end of the processed data.
  *
  * Parameters  :
  *          1  :  csp = Current client state (buffers, headers, etc...)

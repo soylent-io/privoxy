@@ -2027,7 +2027,7 @@ static int read_http_request_body(struct client_state *csp)
       len = read_socket(csp->cfd, buf, (int)max_bytes_to_read);
       if (len <= -1)
       {
-         log_error(LOG_LEVEL_CONNECT, "Failed receiving request body from %s", csp->ip_addr_str);
+         log_error(LOG_LEVEL_CONNECT, "Failed receiving request body from %s: %E", csp->ip_addr_str);
          return 1;
       }
       if (add_to_iob(csp->client_iob, csp->config->buffer_limit, (char *)buf, len))
@@ -2039,11 +2039,11 @@ static int read_http_request_body(struct client_state *csp)
 
    if (to_read != 0)
    {
-      log_error(LOG_LEVEL_CONNECT, "Not enough post data has been read: expected %d more bytes",
+      log_error(LOG_LEVEL_CONNECT, "Not enough request body has been read: expected %d more bytes",
          csp->expected_client_content_length);
       return 1;
    }
-   log_error(LOG_LEVEL_CONNECT, "The last %d bytes of the request body has been read",
+   log_error(LOG_LEVEL_CONNECT, "The last %d bytes of the request body have been read",
       csp->expected_client_content_length);
    return 0;
 }
@@ -2108,7 +2108,7 @@ static int update_client_headers(struct client_state *csp, size_t new_content_le
  *               FALSE otherwise.
  *
  *********************************************************************/
-static int can_filter_request_body(struct client_state *csp)
+static int can_filter_request_body(const struct client_state *csp)
 {
    if (!can_add_to_iob(csp->client_iob, csp->config->buffer_limit,
                        csp->expected_client_content_length))
@@ -2264,11 +2264,11 @@ static int read_https_request_body(struct client_state *csp)
 
    if (to_read != 0)
    {
-      log_error(LOG_LEVEL_CONNECT, "Not enough post data has been read: expected %d more bytes", to_read);
+      log_error(LOG_LEVEL_CONNECT, "Not enough request body has been read: expected %d more bytes", to_read);
       return 1;
    }
 
-   log_error(LOG_LEVEL_CONNECT, "The last %d bytes of the post data has been read",
+   log_error(LOG_LEVEL_CONNECT, "The last %d bytes of the request body have been read",
       csp->expected_client_content_length);
    return 0;
 }
