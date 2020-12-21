@@ -2239,7 +2239,8 @@ static int read_https_request_body(struct client_state *csp)
    }
 
    for (to_read -= (size_t)(csp->client_iob->eod - csp->client_iob->cur);
-        to_read > 0 || is_ssl_pending(&(csp->ssl_client_attr));
+        to_read > 0 && (is_ssl_pending(&(csp->ssl_client_attr)) ||
+          data_is_available(csp->cfd, csp->config->socket_timeout));
         to_read -= (unsigned)len)
    {
       unsigned char buf[BUFFER_SIZE];
