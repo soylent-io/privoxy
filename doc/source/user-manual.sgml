@@ -3006,7 +3006,8 @@ example.org/blocked-example-page</screen>
    </para>
    <para>
     The distribution <filename>default.filter</filename> file contains a selection of
-    clint-body filters for example purposes.
+    client-body filters for example purposes.
+   </para>
    <para>
     The amount of data that can be filtered is limited by the
     <literal><link linkend="buffer-limit">buffer-limit</link></literal>

@@ -2057,6 +2057,7 @@ static int read_http_request_body(struct client_state *csp)
  *
  * Parameters  :
  *          1  :  csp = Current client state (buffers, headers, etc...)
+ *          2  :  new_content_length = new content length value to set
  *
  * Returns     :  0 on success, anything else is an error.
  *
@@ -2065,11 +2066,12 @@ static int update_client_headers(struct client_state *csp, size_t new_content_le
 {
    static const char content_length[] = "Content-Length:";
    int updated = 0;
+   struct list_entry *p;
 
 #ifndef FEATURE_HTTPS_INSPECTION
-   for (struct list_entry *p = csp->headers->first;
+   for (p = csp->headers->first;
 #else
-   for (struct list_entry *p = csp->http->client_ssl ? csp->https_headers->first : csp->headers->first;
+   for (p = csp->http->client_ssl ? csp->https_headers->first : csp->headers->first;
 #endif
         !updated  && (p != NULL); p = p->next)
    {
@@ -2343,6 +2345,7 @@ static int receive_and_send_encrypted_post_data(struct client_state *csp)
    return 0;
 
 }
+
 
 /*********************************************************************
  *

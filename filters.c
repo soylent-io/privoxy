@@ -1759,7 +1759,7 @@ static char *pcrs_filter_response_body(struct client_state *csp)
     */
    if (csp->iob->cur >= csp->iob->eod)
    {
-      return(NULL);
+      return NULL;
    }
 
    new = pcrs_filter_impl(csp, TRUE, csp->iob->cur, &size);
@@ -1771,7 +1771,7 @@ static char *pcrs_filter_response_body(struct client_state *csp)
       clear_iob(csp->iob);
    }
 
-   return(new);
+   return new;
 }
 
 
