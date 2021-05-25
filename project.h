@@ -1106,6 +1106,16 @@ struct client_state
     */
    char *error_message;
 
+   /**
+    * Original content of Referer header, for logging
+    */
+   char *original_referer;
+
+   /**
+    * Original content of UserAgent header, for logging
+    */
+   char *original_ua;
+
 #ifdef FEATURE_HTTPS_INSPECTION
    /* Result of server certificate verification
     *
