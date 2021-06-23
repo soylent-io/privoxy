@@ -3115,6 +3115,13 @@ static jb_err client_referrer(struct client_state *csp, char **header)
    strclean(*header, FORCE_PREFIX);
 #endif /* def FEATURE_FORCE_LOAD */
 
+   /*
+    * Save original referer, so it can be logged later
+    * (9 == strlen("referer: "))
+    */
+   freez(csp->original_referer);
+   csp->original_referer = strdup_or_die((*header) + 9);
+
    if ((csp->action->flags & ACTION_HIDE_REFERER) == 0)
    {
       /* Nothing left to do */
@@ -3283,6 +3290,13 @@ static jb_err crunch_client_header(struct client_state *csp, char **header)
 static jb_err client_uagent(struct client_state *csp, char **header)
 {
    const char *newval;
+
+   /*
+    * Save original user agent for logging purposes
+    * (12 == strlen("user-agent: "))
+    */
+   freez(csp->original_ua);
+   csp->original_ua = strdup_or_die(*header + 12);
 
    if ((csp->action->flags & ACTION_HIDE_USER_AGENT) == 0)
    {
