@@ -470,8 +470,8 @@ static int client_protocol_is_unsupported(struct client_state *csp, char *req)
       log_error(LOG_LEVEL_ERROR,
          "%s tried to use Privoxy as %s proxy: %s",
          csp->ip_addr_str, protocol, req);
-      log_error(LOG_LEVEL_CLF,
-         "%s - - [%T] \"%s\" 400 0", csp->ip_addr_str, req);
+
+      log_access(csp, "400", 0, "%s", req);
       freez(req);
 
 #ifdef FEATURE_HTTPS_INSPECTION
@@ -516,8 +516,7 @@ static int client_has_unsupported_expectations(const struct client_state *csp)
       log_error(LOG_LEVEL_ERROR,
          "Rejecting request from client %s with unsupported Expect header value",
          csp->ip_addr_str);
-      log_error(LOG_LEVEL_CLF,
-         "%s - - [%T] \"%s\" 417 0", csp->ip_addr_str, csp->http->cmd);
+      log_access(csp, "417", 0, "%s", csp->http->cmd);
       write_socket_delayed(csp->cfd,
          UNSUPPORTED_CLIENT_EXPECTATION_ERROR_RESPONSE,
          strlen(UNSUPPORTED_CLIENT_EXPECTATION_ERROR_RESPONSE),
@@ -566,8 +565,7 @@ static jb_err get_request_destination_elsewhere(struct client_state *csp, struct
          " Privoxy isn't configured to accept intercepted requests.",
          csp->ip_addr_str, csp->http->cmd);
       /* XXX: Use correct size */
-      log_error(LOG_LEVEL_CLF, "%s - - [%T] \"%s\" 400 0",
-         csp->ip_addr_str, csp->http->cmd);
+      log_access(csp, "400", 0, "%s", csp->http->cmd);
 
       write_socket_delayed(csp->cfd, CHEADER, strlen(CHEADER),
          get_write_delay(csp));
@@ -587,8 +585,7 @@ static jb_err get_request_destination_elsewhere(struct client_state *csp, struct
       /* We can't work without destination. Go spread the news.*/
 
       /* XXX: Use correct size */
-      log_error(LOG_LEVEL_CLF, "%s - - [%T] \"%s\" 400 0",
-         csp->ip_addr_str, csp->http->cmd);
+      log_access(csp, "400", 0, "%s", csp->http->cmd);
       log_error(LOG_LEVEL_ERROR,
          "Privoxy was unable to get the destination for %s's request: %s",
          csp->ip_addr_str, csp->http->cmd);
@@ -839,16 +836,15 @@ static void send_crunch_response(struct client_state *csp, struct http_response 
       {
          log_error(LOG_LEVEL_CRUNCH, "%s: https://%s%s", crunch_reason(rsp),
             http->hostport, http->path);
-         log_error(LOG_LEVEL_CLF, "%s - - [%T] \"%s https://%s%s %s\" %s %lu",
-            csp->ip_addr_str, http->gpc, http->hostport, http->path,
-            http->version, status_code, rsp->content_length);
+         log_access(csp, status_code, rsp->content_length,
+            "%s https://%s%s %s", http->gpc, http->hostport, http->path,
+            http->version);
       }
       else
 #endif
       {
          log_error(LOG_LEVEL_CRUNCH, "%s: %s", crunch_reason(rsp), http->url);
-         log_error(LOG_LEVEL_CLF, "%s - - [%T] \"%s\" %s %lu",
-            csp->ip_addr_str, http->ocmd, status_code, rsp->content_length);
+         log_access(csp, status_code, rsp->content_length, "%s", http->ocmd);
       }
       /* Write the answer to the client */
 #ifdef FEATURE_HTTPS_INSPECTION
@@ -1595,8 +1591,7 @@ static jb_err receive_chunked_client_request_body(struct client_state *csp)
    {
       write_socket_delayed(csp->cfd, CLIENT_BODY_PARSE_ERROR_RESPONSE,
          strlen(CLIENT_BODY_PARSE_ERROR_RESPONSE), get_write_delay(csp));
-      log_error(LOG_LEVEL_CLF,
-         "%s - - [%T] \"Failed reading chunked client body\" 400 0", csp->ip_addr_str);
+      log_access(csp, "400", 0, "Failed reading chunked client body");
       return JB_ERR_PARSE;
    }
    log_error(LOG_LEVEL_CONNECT,
@@ -1606,7 +1601,6 @@ static jb_err receive_chunked_client_request_body(struct client_state *csp)
    return JB_ERR_OK;
 
 }
-
 
 #ifdef FUZZ
 /*********************************************************************
@@ -1805,7 +1799,7 @@ static jb_err receive_client_request(struct client_state *csp)
       write_socket_delayed(csp->cfd, CHEADER, strlen(CHEADER),
          get_write_delay(csp));
       /* XXX: Use correct size */
-      log_error(LOG_LEVEL_CLF, "%s - - [%T] \"Invalid request\" 400 0", csp->ip_addr_str);
+      log_access(csp, "400", 0, "Invalid request");
       log_error(LOG_LEVEL_ERROR,
          "Couldn't parse request line received from %s: %s",
          csp->ip_addr_str, jb_err_to_string(err));
@@ -1993,8 +1987,7 @@ static jb_err parse_client_request(struct client_state *csp)
    {
       log_error(LOG_LEVEL_ERROR, "Failed to parse client request from %s.",
          csp->ip_addr_str);
-      log_error(LOG_LEVEL_CLF, "%s - - [%T] \"%s\" 400 0",
-         csp->ip_addr_str, csp->http->cmd);
+      log_access(csp, "400", 0, "%s", csp->http->cmd);
       write_socket_delayed(csp->cfd, CHEADER, strlen(CHEADER), get_write_delay(csp));
       return JB_ERR_PARSE;
    }
@@ -2011,8 +2004,7 @@ static jb_err parse_client_request(struct client_state *csp)
       write_socket_delayed(csp->cfd, MESSED_UP_REQUEST_RESPONSE,
          strlen(MESSED_UP_REQUEST_RESPONSE), get_write_delay(csp));
       /* XXX: Use correct size */
-      log_error(LOG_LEVEL_CLF,
-         "%s - - [%T] \"Invalid request generated\" 400 0", csp->ip_addr_str);
+      log_access(csp, "400", 0, "Invalid request generated");
       log_error(LOG_LEVEL_ERROR,
          "Invalid request line after applying header filters.");
       free_http_request(http);
@@ -2764,7 +2756,7 @@ static jb_err process_encrypted_request(struct client_state *csp)
       ssl_send_data_delayed(&(csp->ssl_client_attr),
          (const unsigned char *)CHEADER, strlen(CHEADER), get_write_delay(csp));
       /* XXX: Use correct size */
-      log_error(LOG_LEVEL_CLF, "%s - - [%T] \"Invalid request\" 400 0", csp->ip_addr_str);
+      log_access(csp, "400", 0, "Invalid request");
       log_error(LOG_LEVEL_ERROR,
          "Couldn't parse request line received from %s: %s",
          csp->ip_addr_str, jb_err_to_string(err));
@@ -2849,8 +2841,7 @@ static jb_err process_encrypted_request(struct client_state *csp)
          (const unsigned char *)CHEADER, strlen(CHEADER), get_write_delay(csp));
       log_error(LOG_LEVEL_ERROR, "Failed to parse client request from %s.",
          csp->ip_addr_str);
-      log_error(LOG_LEVEL_CLF, "%s - - [%T] \"%s\" 400 0",
-         csp->ip_addr_str, csp->http->cmd);
+      log_access(csp, "400", 0, "%s", csp->http->cmd);
       return JB_ERR_PARSE;
    }
 
@@ -2864,8 +2855,7 @@ static jb_err process_encrypted_request(struct client_state *csp)
       log_error(LOG_LEVEL_ERROR,
          "Invalid request line after applying header filters.");
       /* XXX: Use correct size */
-      log_error(LOG_LEVEL_CLF,
-         "%s - - [%T] \"Invalid request generated\" 400 0", csp->ip_addr_str);
+      log_access(csp, "400", 0, "Invalid request generated");
 
       return JB_ERR_PARSE;
    }
@@ -3784,8 +3774,7 @@ static void handle_established_connection(struct client_state *csp)
                    */
                   log_error(LOG_LEVEL_ERROR, "Invalid server headers. "
                      "Applying the MS IIS5 hack didn't help.");
-                  log_error(LOG_LEVEL_CLF,
-                     "%s - - [%T] \"%s\" 502 0", csp->ip_addr_str, http->cmd);
+                  log_access(csp, "502", 0, "%s", http->cmd);
 #ifdef FEATURE_HTTPS_INSPECTION
                   /*
                    * Sending data with standard or secured connection (HTTP/HTTPS)
@@ -3840,8 +3829,7 @@ static void handle_established_connection(struct client_state *csp)
                      "No server or forwarder response received on socket %d. "
                      "Closing client socket %d without sending data.",
                      csp->server_connection.sfd, csp->cfd);
-                  log_error(LOG_LEVEL_CLF,
-                     "%s - - [%T] \"%s\" 502 0", csp->ip_addr_str, http->cmd);
+                  log_access(csp, "502", 0, "%s", http->cmd);
                }
                else
                {
@@ -3878,8 +3866,7 @@ static void handle_established_connection(struct client_state *csp)
                log_error(LOG_LEVEL_ERROR,
                   "Invalid server or forwarder response. Starts with: %s",
                   csp->headers->first->str);
-               log_error(LOG_LEVEL_CLF,
-                  "%s - - [%T] \"%s\" 502 0", csp->ip_addr_str, http->cmd);
+               log_access(csp, "502", 0, "%s", http->cmd);
 #ifdef FEATURE_HTTPS_INSPECTION
                /*
                 * Sending data with standard or secured connection (HTTP/HTTPS)
@@ -3923,8 +3910,7 @@ static void handle_established_connection(struct client_state *csp)
              */
             if (JB_ERR_OK != sed(csp, FILTER_SERVER_HEADERS))
             {
-               log_error(LOG_LEVEL_CLF,
-                  "%s - - [%T] \"%s\" 502 0", csp->ip_addr_str, http->cmd);
+               log_access(csp, "502", 0, "%s", http->cmd);
 #ifdef FEATURE_HTTPS_INSPECTION
                /*
                 * Sending data with standard or secured connection (HTTP/HTTPS)
@@ -4055,8 +4041,7 @@ static void handle_established_connection(struct client_state *csp)
                log_error(LOG_LEVEL_ERROR,
                   "Closed server connection detected. "
                   "Applying the MS IIS5 hack didn't help.");
-               log_error(LOG_LEVEL_CLF,
-                  "%s - - [%T] \"%s\" 502 0", csp->ip_addr_str, http->cmd);
+               log_access(csp, "502", 0, "%s", http->cmd);
 #ifdef FEATURE_HTTPS_INSPECTION
                /*
                 * Sending data with standard or secured connection (HTTP/HTTPS)
@@ -4113,15 +4098,14 @@ static void handle_established_connection(struct client_state *csp)
 #ifdef FEATURE_HTTPS_INSPECTION
    if (client_use_ssl(csp))
    {
-      log_error(LOG_LEVEL_CLF, "%s - - [%T] \"%s https://%s%s %s\" 200 %llu",
-         csp->ip_addr_str, http->gpc, http->hostport, http->path,
-         http->version, csp->content_length);
+      log_access(csp, "200", csp->content_length,
+        "%s https://%s%s %s", http->gpc, http->hostport, http->path,
+        http->version);
    }
    else
 #endif
    {
-      log_error(LOG_LEVEL_CLF, "%s - - [%T] \"%s\" 200 %llu",
-         csp->ip_addr_str, http->ocmd, csp->content_length);
+      log_access(csp, "200", csp->content_length, "%s", http->ocmd);
    }
    csp->server_connection.timestamp = time(NULL);
 }

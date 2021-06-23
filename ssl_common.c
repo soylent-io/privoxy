@@ -429,9 +429,10 @@ extern void ssl_send_certificate_error(struct client_state *csp)
 
    log_error(LOG_LEVEL_CRUNCH, "Certificate error: %s: https://%s%s",
       reason, csp->http->hostport, csp->http->path);
-   log_error(LOG_LEVEL_CLF, "%s - - [%T] \"%s https://%s%s %s\" 403 %lu",
-      csp->ip_addr_str, csp->http->gpc, csp->http->hostport, csp->http->path,
-      csp->http->version, message_len-head_length);
+   log_access(csp, "403", message_len-head_length,
+      "%s https://%s%s %s\"",
+      csp->http->gpc, csp->http->hostport, csp->http->path,
+      csp->http->version);
 
 #ifdef FEATURE_CONNECTION_KEEP_ALIVE
    csp->flags &= ~CSP_FLAG_CLIENT_CONNECTION_KEEP_ALIVE;
