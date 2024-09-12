@@ -53,6 +53,7 @@
 #define LOG_LEVEL_CGI        0x0800 /* CGI / templates */
 #define LOG_LEVEL_RECEIVED   0x8000
 #define LOG_LEVEL_ACTIONS   0x10000
+#define LOG_LEVEL_CLF2      0x40000 /* Combined Log File format */
 #ifdef FUZZ
 /*
  * Permanently disables logging through log_error().
@@ -74,6 +75,8 @@ extern void disable_logging(void);
 extern void init_log_module(void);
 extern void show_version(const char *prog_name);
 extern void log_error(int loglevel, const char *fmt, ...);
+extern void log_access(const struct client_state *csp, const char *http_code,
+    unsigned long resp_size, const char *fmt, ...);
 extern const char *jb_err_to_string(jb_err jb_error);
 
 #endif /* ndef ERRLOG_H_INCLUDED */

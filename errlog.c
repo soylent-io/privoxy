@@ -708,7 +708,7 @@ void log_error(int loglevel, const char *fmt, ...)
    memset(outbuf, 0, sizeof(outbuf));
 
    /* Add prefix for everything but Common Log Format messages */
-   if (loglevel != LOG_LEVEL_CLF)
+   if (loglevel != LOG_LEVEL_CLF && loglevel != LOG_LEVEL_CLF2)
    {
       length = (size_t)snprintf(outbuf, log_buffer_size, "%s %08lx %s: ",
          timestamp, thread_id, get_log_level_string(loglevel));
@@ -931,6 +931,42 @@ void log_error(int loglevel, const char *fmt, ...)
 
    unlock_logfile();
 
+}
+
+/*********************************************************************
+ *
+ * Function    :  log_access
+ *
+ * Description :  This function logs requests in Common and/or Combined log format
+ *
+ * Parameters  :
+ *          1  :  csp       = current client state
+ *          2  :  http_code = response http code
+ *          3  :  resp_size = response size
+ *          4  :  fmt       = printf format for request string
+ *          5  :  ...       = arguments to be inserted in fmt (printf-like).
+ *
+ * Returns     :  N/A
+ *
+ *********************************************************************/
+
+void log_access(const struct client_state *csp, const char *http_code,
+    unsigned long resp_size, const char *fmt, ...)
+{
+   char req_buf[LOG_BUFFER_SIZE];
+   va_list ap;
+
+   va_start(ap, fmt);
+   vsnprintf(req_buf, sizeof(req_buf), fmt, ap);
+   va_end(ap);
+
+   log_error(LOG_LEVEL_CLF, "%s - - [%T] \"%s\" %s %lu",
+     csp->ip_addr_str, req_buf, http_code, resp_size);
+
+   log_error(LOG_LEVEL_CLF2, "%s - - [%T] \"%s\" %s %lu \"%s\" \"%s\"",
+     csp->ip_addr_str, req_buf, http_code, resp_size,
+     csp->original_referer ? csp->original_referer : "",
+     csp->original_ua ? csp->original_ua : "");
 }
 
 
